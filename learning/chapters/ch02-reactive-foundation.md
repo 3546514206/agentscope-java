@@ -172,7 +172,7 @@ protected Mono<Msg> callInternal(AgentState state, Msg msg, RuntimeContext rc) {
 
 **观察 2**：用 `Mono.defer` 包一层是为了**延迟执行**——只有订阅时才计算 messages 列表。
 
-**观察 3**：`.single()` 确保返回 `Mono<Msg>` 而不是 `Flux<Msg>`，与 `Agent` 接口契约一致（`Agent.java:42-46`）。
+**观察 3**：`.single()` 确保返回 `Mono<Msg>` 而不是 `Flux<Msg>`，与 `Agent` 接口契约一致（`Agent.java:47` 接口定义）。
 
 ### 3.2 `reasoning()` 里的多阶段组合
 

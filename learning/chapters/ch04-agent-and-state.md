@@ -38,42 +38,51 @@ public interface Agent
 
 **设计意图**：
 
-- `call` 和 `streamEvents` 是**互斥视图** —— 一次调用只走其一（看 `Agent.java:42-46`）
+- `call` 和 `streamEvents` 是同一调用的两个**视图** —— `call` 只取终态 `Msg`，`streamEvents` 暴露完整事件流；二者底层走同一管线，但只暴露其一（看 `Agent.java:42-46` 的 "Reply contract" Javadoc 注释）
 - `observe` 实现"**订阅但不响应**"，是 multi-agent 编排的基础（主 Agent 监听子 Agent 的输出但不立即回话）
 - `interrupt()` 是**协作式中断**（检查点机制，非强制 kill）
 
+**关键纠正**（与之前报告相比）：
+- `Agent.java:42-46` 的注释是 **"Reply contract"**（说明一次 `call(...)` 只产生一个终态 `Msg`），**不是**"互斥视图"
+- 之前报告里写的"互斥视图"原话在该文件中**不存在**
+
 ### 2.2 `AgentBase` 的通用能力
 
-读 `agentscope-core/src/main/java/io/agentscope/core/agent/AgentBase.java:92-200`：
+读 `agentscope-core/src/main/java/io/agentscope/core/agent/AgentBase.java:91-216`：
 
 ```java
 public abstract class AgentBase implements Agent {
-    // 1. 事件总线
-    private final AgentEventEmitter eventEmitter = new AgentEventEmitter();
+    // 1. 身份字段
+    protected final String agentId;
+    protected final String name;
+    protected final String description;
 
-    // 2. Hook 调度
-    protected final HookDispatcher hookDispatcher;
+    // 2. Hook 列表（不是 HookDispatcher）
+    private final List<Hook> hooks = new CopyOnWriteArrayList<>();
+    private final List<Hook> systemHooks = new CopyOnWriteArrayList<>();
+    private final List<HubSubscriber> hubSubscribers = new CopyOnWriteArrayList<>();
 
-    // 3. 状态加载与按 session 隔离
-    private final AgentStateStore stateStore;
-    private final ConcurrentMap<String, AgentState> stateCache = new ConcurrentHashMap<>();
+    // 3. 同 key 串行化（用 Mono<Void> 信号量实现）
+    private final ConcurrentMap<Object, Mono<Void>> callGates = new ConcurrentHashMap<>();
+    private final Comparator<Hook> HOOK_COMPARATOR = ...;
+    private final List<Hook> runtimeContextAwareHooks = new CopyOnWriteArrayList<>();
 
-    // 4. 关键方法：callInternal 模板
-    protected abstract Mono<Msg> callInternal(AgentState state, Msg msg, RuntimeContext rc);
+    // 4. 关键方法：callInternal 默认实现（**非 abstract**）
+    protected Mono<Msg> callInternal(...) { /* 模板 */ }
 
     public final Mono<Msg> call(Msg msg, RuntimeContext rc) {
-        return loadOrCreateState(rc)
-            .flatMap(state -> callInternal(state, msg, rc))
-            .doFinally(sig -> persistState(rc, state));
+        // 用 serializeOnKey(rc) 把同 key 的 call 串行化
+        return serializeOnKey(...)
+            .then(Mono.defer(() -> /* 实际核心逻辑 */));
     }
 }
 ```
 
-**关键观察 1**：`call` 方法是 `final` 模板方法，子类**只能**实现 `callInternal`。这是 Template Method 模式的应用。
+**关键观察 1**：`call` 方法是 `final` 模板方法；`callInternal` **有默认实现**（L210-216），子类**不强制**重写。这是 Template Method 模式的应用。
 
-**关键观察 2**：状态按 `RuntimeContext` 缓存 —— 同一 `(userId, sessionId)` 共享 `AgentState`，不同 session 完全隔离。
+**关键观察 2**：**状态加载不在 `AgentBase` 内部** —— `eventEmitter` / `HookDispatcher` / `stateStore` / `stateCache` 这些字段都**在 `ReActAgent` 内部**（详见 §3.1）。`AgentBase` 只关心 Hook 列表和同 key 串行化。
 
-**关键观察 3**：状态加载是 `Mono<AgentState>`，是**异步**的（store 可能是 Redis / DB）。
+**关键观察 3**：`callGates: ConcurrentMap<Object, Mono<Void>>` 是 `AgentBase` 唯一的并发控制原语。**没有 Semaphore、没有专门的"session 锁"** —— 串行化通过把每个 key 对应一个 `Mono<Void>` 链实现。
 
 ### 2.3 `AgentState` —— 状态的新范式
 
@@ -150,19 +159,19 @@ public class UserAgent extends AgentBase {
 
 ## 3. 源码精读
 
-### 3.1 `AgentBase` 状态加载的细节
+### 3.1 状态加载实际在 `ReActAgent` 内部
 
-读 `AgentBase.java:200-400`（状态加载段）：
+`AgentBase` **不持有状态**。状态加载在 `ReActAgent.loadOrCreateAgentStateForSlot`（`ReActAgent.java:357`）：
 
 ```java
-private Mono<AgentState> loadOrCreateState(RuntimeContext rc) {
+private Mono<AgentState> loadOrCreateAgentStateForSlot(RuntimeContext rc, AgentStateSlot slot) {
     String key = rc.getStateKey();
     return Mono.defer(() -> {
-        // 1. 先看内存缓存
+        // 1. 先看内存缓存（stateCache 在 ReActAgent 内）
         AgentState cached = stateCache.get(key);
         if (cached != null) return Mono.just(cached);
-        // 2. 缓存未命中，从 store 加载
-        return stateStore.load(rc.getUserId(), rc.getSessionId())
+        // 2. 缓存未命中，从 stateStore 加载
+        return stateStore.load(rc.getUserId(), rc.getSessionId(), ...)
             .switchIfEmpty(Mono.defer(() -> Mono.just(AgentState.builder()
                 .sessionId(rc.getSessionId())
                 .userId(rc.getUserId())
@@ -174,45 +183,58 @@ private Mono<AgentState> loadOrCreateState(RuntimeContext rc) {
 
 **观察 1**：`switchIfEmpty` 处理"无历史记录"情况，新建空 state。
 
-**观察 2**：`stateCache` 是 `ConcurrentMap` —— 同一 session 的并发请求会共享 state，但 `ReActAgent` 内部会用 `key-level lock`（看 `AgentBase.java:326`）保证同 session 串行。
+**观察 2**：`stateCache` 是 `ReActAgent` 内部的 `ConcurrentMap`（L262），不是 `AgentBase`。同一 session 的并发请求会共享 state；同 key 串行化在 `AgentBase` 通过 `callGates` + `serializeOnKey`（L344）实现，**不是** Semaphore。
 
-### 3.2 状态隔离 vs 并发模型
+### 3.2 同 key 串行化机制
 
-读 `AgentBase.java:100-150` 的 session 锁逻辑：
+读 `AgentBase.java:344 serializeOnKey`（这是 Javadoc 的 `callSerializationKey` 方法，**L324-336** 是 Javadoc 与方法声明）：
 
 ```java
-// 不同 session 并发执行；同一 session 串行执行
-private final ConcurrentMap<String, Semaphore> sessionLocks = new ConcurrentHashMap<>();
+// 不同 key 并发执行；同一 key 串行执行
+private final ConcurrentMap<Object, Mono<Void>> callGates = new ConcurrentHashMap<>();
 
-private <T> Mono<T> withSessionLock(String key, Mono<T> work) {
-    Semaphore sem = sessionLocks.computeIfAbsent(key, k -> new Semaphore(1));
-    return Mono.fromCallable(sem::acquire)
-        .flatMap(permit -> work.doFinally(sig -> sem.release()));
+private <T> Mono<T> serializeOnKey(Object key, Mono<T> work) {
+    Mono<Void> gate = callGates.compute(key, (k, prev) -> {
+        Mono<Void> chain = (prev == null) ? Mono.empty() : prev;
+        return chain.then();  // 链式：每个新请求都追加到链尾
+    });
+    // ...
 }
 ```
 
-**意图**：保证对同一 `(userId, sessionId)` 的并发 `call` **串行执行**，避免状态写竞争。不同 session 完全独立。
+**意图**：保证对同一 key（典型是 `RuntimeContext` 派生的 session 标识）的并发 `call` **串行执行**，避免状态写竞争。不同 key 完全独立。**注意**：实现用的是 `Mono<Void>` 链式追加，不是 Semaphore。
 
-### 3.3 `UserAgent` 的妙用
+### 3.3 `UserAgent` 的真实结构
+
+读 `agentscope-core/src/main/java/io/agentscope/core/agent/user/UserAgent.java:68`（类已 `@Deprecated forRemoval since 2.0.0`）：
 
 ```java
+@Deprecated(forRemoval = true, since = "2.0.0")
 public class UserAgent extends AgentBase {
-    private final Queue<Msg> pendingInputs = new LinkedBlockingQueue<>();
-    private final Flux<Msg> inputStream;
+
+    private UserInputBase inputMethod;   // 可插拔输入源
+    // 默认 inputMethod = StreamUserInput（System.in / System.out）
 
     @Override
-    protected Mono<Msg> callInternal(AgentState state, Msg msg, RuntimeContext rc) {
-        // 等待人类输入
-        return Mono.fromCallable(() -> pendingInputs.take());
+    protected Mono<Msg> doCall(List<Msg> msgs) {
+        return getUserInput(msgs, null);
     }
 
-    public Mono<Void> pushUserInput(Msg input) {
-        return Mono.fromRunnable(() -> pendingInputs.add(input));
+    public Mono<Msg> getUserInput(List<Msg> contextMessages, Class<?> structuredModel) {
+        return inputMethod
+            .handleInput(getAgentId(), getName(), contextMessages, structuredModel)
+            .map(this::createMessageFromInput)
+            .doOnNext(this::printMessage);
     }
 }
 ```
 
-**用途**：在多 Agent 编排中，把"等待人类"也建模为 Agent，主 Agent 可以 `call(userAgent)` 来阻塞等用户输入。
+**关键纠正**：
+- `UserAgent` **没有** `Queue<Msg> pendingInputs`、没有 `pushUserInput`、没有 `Mono.fromCallable(() -> pendingInputs.take())` 这些字段/方法。
+- 它通过 **`UserInputBase` 接口**（默认实现 `StreamUserInput`）拿到用户输入；想换输入源（Web UI、文件、消息队列）就实现 `UserInputBase` 注入。
+- 类已被 `@Deprecated` 标记，**新代码不应再用**。
+
+**用途**：在多 Agent 编排中，把"等待人类"建模为 Agent，主 Agent 可以 `call(userAgent)` 来阻塞等用户输入。
 
 ## 4. 设计权衡
 

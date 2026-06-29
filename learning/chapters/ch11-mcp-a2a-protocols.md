@@ -94,18 +94,28 @@ toolkit.registerSubAgent(SubAgentConfig.builder()
 
 ### 3.1 `McpClientBuilder` 的设计
 
-`tool/mcp/McpClientBuilder.java:527`：
+`tool/mcp/McpClientBuilder.java`（实际 790 行）：
 
 ```java
 public class McpClientBuilder {
     private String name;
-    private String command;         // stdio 模式
-    private List<String> args;
-    private String endpoint;         // HTTP 模式
+    private TransportConfig transportConfig;     // command/args/endpoint 封装在这里
+    private Duration requestTimeout;
+    private Duration initializationTimeout;
+    private ElicitationHandler asyncElicitationHandler;
+    private ElicitationHandler syncElicitationHandler;
     private List<String> protocolVersions;
-    // ...
+    // 注意：顶层没有 command/args/endpoint 字段
 }
 ```
+
+**`TransportConfig` 子类**（封装 transport 细节）：
+
+| 子类 | 用途 | 关键字段 |
+|---|---|---|
+| `StdioTransportConfig` | stdio 模式 | `command`, `args` |
+| `SseTransportConfig` | SSE/HTTP 模式 | `endpoint` |
+| `StreamableHttpTransportConfig` | HTTP streamable 模式 | `endpoint` |
 
 **两种连接方式**：
 
@@ -113,6 +123,8 @@ public class McpClientBuilder {
 |---|---|---|
 | stdio | 启动子进程 | `npx -y @mcp/server-x` |
 | HTTP/SSE | 连接远端 server | `http://mcp.internal/api` |
+
+**注意**：之前报告里"McpClientBuilder.java:527"行号指向的是 `ProtocolVersionOverrideTransport` 的 Javadoc 段，**不是方法锚点**。
 
 ### 3.2 MCP 工具如何变成 ToolBase
 
@@ -133,24 +145,23 @@ for (McpTool rt : remoteTools) {
 
 `McpToolAdapter` 在 `callAsync` 中通过 `mcpClient.callTool(name, args)` 转发。
 
-### 3.3 `RemoteSubagentStub` 与 Nacos
+### 3.3 `RemoteSubagentStub` 与 Nacos 集成
 
-`harness/agent/subagent/RemoteSubagentStub.java`：
+**关键纠正**：`RemoteSubagentStub`（`harness/agent/subagent/RemoteSubagentStub.java`，**54 行**）**不是 `ToolBase`，不直接持有 `NacosNamingService`**。它是一个 54 行的轻量 `AgentBase` 子类：
 
 ```java
-public class RemoteSubagentStub extends ToolBase {
-    private final NacosNamingService nacos;  // 服务发现
-    private final String agentName;
-
-    public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
-        // 1. 从 Nacos 查 endpoint
-        String endpoint = nacos.getEndpoint(agentName);
-
-        // 2. HTTP POST 调用
-        return httpClient.post(endpoint + "/call", toA2ARequest(param))
-            .map(this::toToolResult);
-    }
+public class RemoteSubagentStub extends AgentBase {
+    private final String name;
+    private final String description;
+    // 没有 endpoint、httpClient、nacos 字段
 }
+```
+
+真正的 Nacos 服务发现 + HTTP 调用在 **`agentscope-extensions-nacos-a2a`** 子模块里实现 —— `RemoteSubagentStub` 只是定义"远端子 Agent"这个**抽象角色**，由 Nacos 适配器层填充具体实现：
+
+```
+harness/agent/subagent/RemoteSubagentStub.java       # 抽象（54 行）
+agentscope-extensions-nacos-a2a/.../NacosSubagentStub.java  # 具体实现
 ```
 
 **优势**：

@@ -60,8 +60,10 @@ public interface AgentStateStore {
 
 `state/InMemoryAgentStateStore.java`：
 
-- `ConcurrentHashMap<String, State>` —— 纯内存
-- 进程重启**丢失**
+- 内部用**嵌套** `ConcurrentHashMap<String, Map<String, SessionData>>`（不是简单的 `ConcurrentHashMap<String, State>`）
+  - 外层 key：`userId`
+  - 内层 value：`SessionData`，含 `Map<String, State> singleStates` 和 `Map<String, List<State>> listStates`
+- 纯内存，进程重启**丢失**
 - 适合单元测试
 
 #### `JsonFileAgentStateStore`
@@ -122,15 +124,22 @@ public class StateBackedMemory implements Memory {
 
 ```java
 public interface LongTermMemory {
-    Mono<Void> record(Msg message);     // 记录一条事实
-    Flux<Knowledge> retrieve(String query, int limit);  // 语义检索
-    Mono<Void> clear();                  // 清除
+    Mono<Void> record(List<Msg> msgs);     // 记录一条或多条事实（接收 List，不是单条）
+    Mono<String> retrieve(Msg msg);         // 语义检索（入参是 Msg，输出 String）
+    // 注意：没有 clear() 方法 —— 如需清空需通过 record 覆盖或扩展实现
 }
 ```
 
+**关键纠正**（与之前报告相比）：
+- `record` 接 `List<Msg>`，不是 `Msg`
+- `retrieve` 接 `Msg` 返回 `Mono<String>`，不是 `Flux<Knowledge>` 也不是 `(String, int)`
+- **没有 `clear()` 方法**
+
 **实现位置**：
 
-- `agentscope-extensions/agentscope-extensions-mem/`：基于向量数据库的实现
+- `agentscope-extensions/agentscope-extensions-mem/agentscope-extensions-mem0/`
+- `agentscope-extensions/agentscope-extensions-mem/agentscope-extensions-memory-bailian/`
+- `agentscope-extensions/agentscope-extensions-mem/agentscope-extensions-reme/`
 
 ### 2.6 `LongTermMemoryMode` 三种模式
 
@@ -154,28 +163,30 @@ public enum LongTermMemoryMode {
 
 ### 3.1 `JsonFileAgentStateStore` 的文件布局
 
-读 `state/JsonFileAgentStateStore.java:99-200`：
+读 `state/JsonFileAgentStateStore.java`（实际 396 行）：
 
 ```java
-public Mono<Void> save(String userId, String sessionId, String key, State value) {
-    return Mono.fromCallable(() -> {
-        Path dir = resolveDir(userId, sessionId, key);  // ~/.agentscope/state/agent/u/s/
-        Files.createDirectories(dir);
-        Path file = dir.resolve(key + ".json");
+// 关键：save 是同步 void 方法，不是 Mono.fromCallable
+public void save(String userId, String sessionId, String key, State value) {
+    Path dir = resolveDir(userId, sessionId, key);  // ~/.agentscope/state/<userId>/<sessionId>/
+    Files.createDirectories(dir);
+    Path file = dir.resolve(key + ".json");
 
-        // 写时复制：写到临时文件，原子重命名
-        Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-        Files.writeString(tmp, JsonCodec.encode(value));
-        Files.move(tmp, file, ATOMIC_MOVE);
-
-        return null;
-    }).subscribeOn(Schedulers.boundedElastic());
+    // 写时复制：写到临时文件，原子重命名
+    Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+    Files.writeString(tmp, JsonCodec.encode(value));
+    Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
 }
 ```
 
+**关键纠正**（与之前报告相比）：
+- **`save` 是同步 void 方法**（L99 和 L111），**没有 Reactor** 包裹
+- `Mono.fromCallable + subscribeOn(boundedElastic)` 只在 `clearAllSessions()`（L251-280）使用
+- 默认路径 **`~/.agentscope/state/<userId>/<sessionId>/`** —— **没有 `<agentId>` 段**
+
 **观察 1**：写时复制 + 原子重命名 —— 防止写到一半崩溃导致损坏。
 
-**观察 2**：`subscribeOn(boundedElastic)` —— 文件 IO 异步化（看 Ch02 反模式警告）。
+**观察 2**：调用方负责在合适线程调用（通常是 `Schedulers.boundedElastic().schedule(() -> store.save(...))`）。
 
 ### 3.2 `AgentState` 序列化
 
@@ -192,26 +203,35 @@ public Mono<Void> save(String userId, String sessionId, String key, State value)
 
 ### 3.3 `StaticLongTermMemoryHook` 自动记录
 
-`memory/StaticLongTermMemoryHook.java:231`：
+`memory/StaticLongTermMemoryHook.java`（实际 300 行，已 `@Deprecated(forRemoval = true, since = "2.0.0")`）：
 
 ```java
+@Deprecated(forRemoval = true, since = "2.0.0")
 public class StaticLongTermMemoryHook implements Hook {
     private final LongTermMemory memory;
-    private int counter = 0;
+    private final boolean asyncRecord;
+    // 注意：没有 counter 字段，没有"每 N 条"逻辑
 
     @Override
-    public Mono<HookEvent> onPostCall(...) {
-        // 每 N 条消息自动记录一次
-        counter++;
-        if (counter >= 10) {
-            return memory.record(currentMsg).then(Mono.just(event));
+    public Mono<HookEvent> handlePostCall(PostCallEvent event) {
+        // 每个 PostCallEvent 都**无条件**触发记录，没有节流
+        if (asyncRecord) {
+            return memory.record(currentMsgs)
+                .subscribeOn(Schedulers.newBoundedElastic(1, 3, "long-term-memory-record"))
+                .then(Mono.just(event));
         }
-        return Mono.just(event);
+        return memory.record(currentMsgs).then(Mono.just(event));
     }
 }
 ```
 
-**观察**：通过 Hook 实现『框架自动记录』，业务侧零侵入。
+**关键纠正**（与之前报告相比）：
+- **没有 `counter` 字段**，没有"每 10 条"节流逻辑。
+- **每个 `PostCallEvent` 都无条件调用 `memory.record(...)`**。
+- 异步模式用 `Schedulers.newBoundedElastic(1, 3, "long-term-memory-record")`（独占有界线程池，防止内存爆）。
+- 该类已被 `@Deprecated forRemoval` 标注 —— **新代码不要用**。
+
+**观察**：通过 Hook 实现『框架自动记录』，业务侧零侵入。但因为全量无节流，长期运行场景需要业务侧自行节流或改用 `AGENT_CONTROL` 模式。
 
 ## 4. 设计权衡
 

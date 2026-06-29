@@ -98,22 +98,33 @@ stateDiagram-v2
 
 ```mermaid
 graph TB
-    A[Tool self-check<br/>checkPermissions] --> B[PermissionRule 表]
-    B --> C[PermissionMode 默认值]
-    C --> D[PermissionBehavior.ALLOW / DENY / ASK]
+    A[deny 规则] --> B[ask 规则]
+    B --> C[tool.checkPermissions 自检]
+    C --> D[allow 规则]
+    D --> E{BYPASS 模式?}
+    E -- 是 --> F[ALLOW]
+    E -- 否 --> G[默认 ASK]
 ```
 
-| 模式 | 行为 |
+**`PermissionMode` 实际枚举值**（`permission/PermissionMode.java`）：
+
+| 值 | 含义 |
 |---|---|
-| `STRICT` | 全部 ASK（除白名单） |
-| `NORMAL` | 读类工具 ALLOW，写类工具 ASK |
-| `PERMISSIVE` | 全部 ALLOW（除黑名单） |
+| `DEFAULT` | 默认（按 ask 规则与工具自检判定） |
+| `ACCEPT_EDITS` | 自动接受编辑类工具 |
+| `EXPLORE` | 探索模式（只读工具全部 ALLOW） |
+| `BYPASS` | 绕过所有检查（慎用） |
+| `DONT_ASK` | 不询问（按 deny/allow 规则判定） |
+
+**注意**：**没有 STRICT / NORMAL / PERMISSIVE** —— 报告此前给出的三档模式是错的，实际是上述 5 种。
+
+**`PermissionBehavior`**：枚举值 `ALLOW` / `DENY` / `ASK` / `PASSTHROUGH`（4 个值，不是 3 个）。
 
 ## 3. 源码精读
 
 ### 3.1 `OtelTracingMiddleware`
 
-`tracing/OtelTracingMiddleware.java`（约 200 行）：
+`tracing/OtelTracingMiddleware.java`（实际 255 行）：
 
 ```java
 public class OtelTracingMiddleware implements MiddlewareBase {
@@ -121,48 +132,62 @@ public class OtelTracingMiddleware implements MiddlewareBase {
 
     @Override
     public Flux<AgentEvent> onAgent(...) {
-        Span span = tracer.spanBuilder("agent.call")
+        // 注意：Span 名是 "invoke_agent " + agent.getName()，不是 "agent.call"
+        Span span = tracer.spanBuilder("invoke_agent " + agent.getName())
             .setAttribute("agent.name", agent.getName())
             .startSpan();
         return next.apply(input)
             .doOnNext(e -> span.addEvent(e.getClass().getSimpleName()))
-            .doFinally(sig -> span.end());
+            // 注意：用 doOnComplete + doOnError 分别处理，不用 doFinally
+            .doOnComplete(() -> span.end())
+            .doOnError(err -> { span.recordException(err); span.end(); });
     }
 }
 ```
 
-**Span 命名约定**：
+**Span 命名约定**（修正后）：
 
-- `agent.{name}` 顶层
+- `invoke_agent <name>` 顶层
 - `reasoning.iter{N}` 推理
-- `tool.{name}` 工具
+- `tool.<name>` 工具
 - `model.call` 模型调用
 
 ### 3.2 `JsonlTraceExporter`
 
-`hook/recorder/JsonlTraceExporter.java:316`：
+`hook/recorder/JsonlTraceExporter.java`（实际 **548 行**，不是 316 行方法锚点 —— L316 实际是 `close()` 里一个 `new IOException("Interrupted while waiting for JSONL exporter to finish pending writes")` 字符串字面量）：
 
 ```java
-public class JsonlTraceExporter implements Hook {
+public class JsonlTraceExporter implements Hook, AutoCloseable {
     private final BufferedWriter writer;
+    private final boolean flushEveryLine;
 
+    // 注意：方法签名是泛型 <T extends HookEvent>，不是 (AgentEvent, HookEventType)
     @Override
-    public Mono<HookEvent> onEvent(AgentEvent event, HookEventType type) {
+    public <T extends HookEvent> Mono<T> onEvent(T event) {     // L135
         return Mono.fromRunnable(() -> {
-            String json = JsonCodec.encode(event);
+            // 注意：用 JsonUtils.getJsonCodec().toJson(record)，不是 JsonCodec.encode(event)
+            String json = JsonUtils.getJsonCodec().toJson(record);   // L244
             writer.write(json);
             writer.newLine();
-            writer.flush();
-        }).thenReturn(new HookEvent(event, type));
+            if (flushEveryLine) {
+                writer.flush();   // L248-250
+            }
+        }).thenReturn(event);
     }
 }
 ```
+
+**关键纠正**（与之前报告相比）：
+- `JsonlTraceExporter.java:316` 不是方法锚点，是 close() 里的字符串字面量
+- `onEvent` 是**泛型单参数** `<T extends HookEvent> Mono<T> onEvent(T event)`，不是 `(AgentEvent, HookEventType)`
+- 序列化用 `JsonUtils.getJsonCodec().toJson(record)`，不是 `JsonCodec.encode(event)`
+- `flush` 只在 `flushEveryLine=true` 时触发（默认不一定每行 flush）
 
 **注意**：v2 推荐用 `MiddlewareBase` 替代 `Hook` 写 trace。看 `recorder/` 是否有更新版本。
 
 ### 3.3 `GracefulShutdownManager`
 
-`shutdown/GracefulShutdownManager.java:301`：
+`shutdown/GracefulShutdownManager.java`（实际 332 行）。`awaitTermination(Duration)` 在 L301-307：
 
 ```java
 while (getState() != ShutdownState.TERMINATED) {
@@ -170,34 +195,58 @@ while (getState() != ShutdownState.TERMINATED) {
         transitionTo(TERMINATED);
         break;
     }
-    Thread.sleep(100);  // 等待活跃请求
+    // 关键：用 Object.wait 而不是 Thread.sleep
+    // 这正是 Ch02 §3.4 "禁止 Thread.sleep" 的反例排除场景：
+    // 这里需要被中断唤醒（其它路径 notifyAll），wait 语义正合适
+    long remaining = timeout.toMillis();
+    terminationLock.wait(Math.min(remaining, 1000));
 }
 ```
 
 **设计要点**：
 
 - 用 `ActiveRequestContext` 跟踪活跃请求
+- 等待用 `Object.wait(timeout)` 而不是 `Thread.sleep` —— 因为它需要被其它线程 `notifyAll` 唤醒（请求完成路径），`Thread.sleep` 无法响应 notify
 - 状态转换用原子操作
 - 注册 `JVM shutdown hook` 自动触发
 
+**与 Ch02 反模式警告的呼应**：Ch02 禁止的是 `Thread.sleep` 在反应式管线里阻塞 reactor 线程；这里的 `Object.wait` 是在 shutdown 管理线程上等待，**不与 reactor 线程冲突**。
+
 ### 3.4 `PermissionEngine` 决策流程
 
-`permission/PermissionEngine.java`：
+`permission/PermissionEngine.java:139` 真实签名与流程：
 
 ```java
-public Mono<PermissionDecision> evaluate(
-        ToolBase tool, Map<String,Object> input, PermissionContextState ctx) {
-    return tool.checkPermissions(input, ctx)        // 1. 工具自检
-        .switchIfEmpty(ruleEngine.match(tool, input)) // 2. 规则表
-        .switchIfEmpty(modeBasedDefault(tool, ctx));  // 3. 模式兜底
+public class PermissionEngine {
+    private final PermissionContextState ctx;   // 构造器注入，不是方法参数
+
+    public Mono<PermissionDecision> checkPermission(
+            ToolBase tool, Map<String, Object> toolInput) {
+        // 注意：方法名是 checkPermission，不是 evaluate
+        // 注意：ctx 是构造器注入的字段，不在方法签名上
+
+        return checkDenyRules(tool, toolInput)        // 1. deny 规则
+            .switchIfEmpty(checkAskRules(tool, toolInput))  // 2. ask 规则
+            .switchIfEmpty(tool.checkPermissions(toolInput, ctx)) // 3. 工具自检
+            .switchIfEmpty(checkAllowRules(tool, toolInput))  // 4. allow 规则
+            .switchIfEmpty(Mono.defer(() -> {              // 5. 模式兜底
+                if (ctx.mode() == PermissionMode.BYPASS) {
+                    return Mono.just(PermissionDecision.allow());
+                }
+                return Mono.just(PermissionDecision.ask());   // 默认 ASK
+            }));
+    }
 }
 ```
 
-**`PermissionBehavior`**：
+**真实链路**：deny → ask → tool.checkPermissions → allow → BYPASS 兜底 → 默认 ASK。**没有 `ruleEngine.match` 这种独立步骤**，规则检查是 `checkDenyRules` / `checkAskRules` / `checkAllowRules` 三个内联方法。
+
+**`PermissionBehavior` 各值语义**：
 
 - `ALLOW` → 立即执行
 - `DENY` → 拒绝
 - `ASK` → 抛 `ToolSuspendException`，Agent 暂停等用户
+- `PASSTHROUGH` → 透传给上层（用于 chain 场景）
 
 ## 4. 设计权衡
 

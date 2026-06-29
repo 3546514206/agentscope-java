@@ -36,16 +36,30 @@ toolkit.registerSubAgent(config);
 
 ### 2.2 `SubAgentConfig` 关键字段
 
-`tool/subagent/SubAgentConfig.java:94`：
+`tool/subagent/SubAgentConfig.java`（实际 242 行，类声明 L63-67）：
 
 | 字段 | 作用 |
 |---|---|
-| `agent` | 子 Agent 实例（任何 `Agent`） |
-| `name` | 工具名前缀（默认 `call_<agentName>`） |
+| `toolName` | 工具名前缀（默认 `call_<agentName>`）—— 注意：字段名是 `toolName`，不是 `name` |
 | `description` | 工具描述（主 Agent 看到的元数据） |
 | `forwardEvents` | 子 Agent 的事件是否转发到主 Agent 事件流 |
 | `streamOptions` | 子 Agent 流式配置 |
-| `stateStore` | 子 Agent 的 state 存储（默认 InMemoryAgentStateStore） |
+| `stateStore` | 子 Agent 的 state 存储（默认 `InMemoryAgentStateStore`） |
+
+**关键纠正**（与之前报告相比）：
+- **没有 `agent` 字段** —— 子 Agent 实例在**注册时**通过 `toolkit.registerSubAgent(config, agent)` 传入，Config 只持有元数据
+- **没有 `name` 字段** —— 是 `toolName`
+
+注册示例：
+
+```java
+SubAgentConfig config = SubAgentConfig.builder()
+    .toolName("researcher")           // 不是 .name()
+    .description("负责检索资料")
+    .build();
+
+toolkit.registerSubAgent(config, researcherAgent);   // agent 在这一步传入
+```
 
 ### 2.3 `HarnessAgent` 的整车能力
 
@@ -124,43 +138,68 @@ public class SubAgentTool extends ToolBase {
 }
 ```
 
-### 3.2 `HarnessAgent` 的工作目录
+### 3.2 `HarnessAgent` 的实际结构
 
-`harness/agent/HarnessAgent.java` 关键字段：
+`harness/agent/HarnessAgent.java` 实际 **2251 行**（不是 ~200 行），关键字段（L146-167）：
 
 ```java
-public class HarnessAgent {
-    private final ReActAgent coreAgent;
-    private final Path workspace;
-    private final AbstractFilesystem filesystem;
-    private final AgentSkillRepository skillRepo;
-    private final SubagentFactory subagentFactory;
-    private final CompactionConfig compactionConfig;
+public class HarnessAgent implements Agent, AutoCloseable {
+    // 1. 核心：装饰一个 ReActAgent
+    private final ReActAgent delegate;        // 注意：字段名是 delegate，不是 coreAgent
+
+    // 2. 工作区
+    private final WorkspaceManager workspaceManager;
+    private final WorkspaceFactory workspaceFactory;
+    private final int ownedWorkspaceIndex;
+    private final DefaultSandboxContext defaultSandboxContext;
+
+    // 3. 压缩与沙箱
+    private final CompactionMiddleware compactionHook;   // 注意：是 Middleware，不是 Config
+    private final SandboxLifecycleMiddleware sandboxLifecycleMw;
+
+    // 4. 技能体系
+    private final List<AgentSkillRepository> skillRepositories;
+    private final PlanModeManager planModeManager;
+    private final SkillPromoter skillPromoter;
+    private final SkillUsageStore skillUsageStore;
+    private final SkillCurator skillCurator;
+    private final SkillAuditLog skillAuditLog;
+
+    // 5. 其它
+    private final MemoryConfig memoryConfig;
+    private final SubagentMiddleware subagentMiddleware;
+    private final DistributedStore distributedStore;
+    private final WorkspacePathNormalizer pathNormalizer;
     // ...
 }
 ```
 
+**关键纠正**：
+- **字段名是 `delegate`**，不是 `coreAgent`。
+- **没有** `Path workspace` / `AbstractFilesystem filesystem` 直接字段 —— 这两个能力由 `WorkspaceManager`/`WorkspaceFactory` 持有。
+- `CompactionConfig` **不存在**，实际是 `CompactionMiddleware`（压缩跑在中间件层）。
+- 实际工程能力远多于此：技能晋升/审计/使用追踪、PlanMode、分布式存储、路径标准化等都各自有专门组件。
+
 ### 3.3 远程 SubAgent 与 A2A 协议
 
-`harness/agent/subagent/RemoteSubagentStub.java` 关键：
+`harness/agent/subagent/RemoteSubagentStub.java` 实际只有 **54 行**（不是含 Nacos 的复杂类）：
 
 ```java
-public class RemoteSubagentStub extends ToolBase {
-    private final String endpoint;  // e.g., "http://other-service/agents/researcher"
-    private final HttpClient http;
-
-    public Mono<ToolResultBlock> callAsync(ToolCallParam param) {
-        // 1. 序列化 Msg 为 A2A 协议格式
-        A2ARequest req = toA2ARequest(param);
-        // 2. HTTP POST
-        return http.post(endpoint, req)
-            .map(A2AResponse::toMsg)
-            .map(msg -> ToolResultBlock.text(msg.getTextContent()));
-    }
+// RemoteSubagentStub 实际很轻量：它本身就是一个 AgentBase
+public class RemoteSubagentStub extends AgentBase {
+    private final String name;
+    private final String description;
+    // 注意：没有 endpoint 字段，没有 NacosNamingService 引用
+    // 真正的远端调用逻辑通过 Agent 协议分发实现
 }
 ```
 
-A2A 协议本质：HTTP + JSON 序列化 Agent 之间的对话。
+**关键纠正**：
+- `RemoteSubagentStub` **不继承 `ToolBase`**，**不持有** `NacosNamingService` / `HttpClient` / `endpoint` 字段。
+- 它是一个 54 行的 Agent 桩，具体远端调用和 Nacos 解析由 **`agentscope-extensions-nacos-a2a`** 模块的 `NacosSubagentStub`（或类似实现）完成。
+- 报告里之前的 `http.post(endpoint, req)` 伪代码是脑补。
+
+A2A 协议本质：HTTP + JSON 序列化 Agent 之间的对话 —— 服务发现、endpoint 解析、负载均衡等由 Nacos 适配器层（独立模块）承担。
 
 ### 3.4 `DefaultAgentManager` 调度
 

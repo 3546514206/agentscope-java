@@ -119,8 +119,8 @@ Order order = reActAgent.call(...)
 
 ```java
 protected Mono<Msg> doCall(List<Msg> msgs, Class<?> structuredOutputClass) {
-    // 1. 生成 JSON Schema
-    JsonNode schema = ToolSchemaGenerator.generate(structuredOutputClass);
+    // 1. 生成 JSON Schema（注意：实际走 JsonSchemaUtils，不是 ToolSchemaGenerator）
+    JsonNode schema = JsonSchemaUtils.generateSchemaFromType(structuredOutputClass);
     // 2. 构造虚拟工具 soTool（兜底路径）
     ToolBase soTool = SchemaOnlyTool.builder()...build();
     // 3. 强制模型只用这个工具
@@ -135,21 +135,29 @@ protected Mono<Msg> doCall(List<Msg> msgs, Class<?> structuredOutputClass) {
 - 如果模型支持原生 `response_format` → 设置 `options.responseFormat` 优先
 - 否则 → 注册虚拟工具强制走工具调用
 
-### 3.2 `ToolSchemaGenerator.generate(Class)` 重载
+### 3.2 `ToolSchemaGenerator` 实际只有一个方法
 
-`tool/ToolSchemaGenerator.java` 提供两个重载：
+`tool/ToolSchemaGenerator.java`（实际 152 行，**只有一个公开静态方法**）：
 
 ```java
-public static Map<String,Object> generate(Method method) { ... }
-public static JsonNode generate(Class<?> pojoClass) { ... }   // 结构化输出用
+public static Map<String, Object> generateParameterSchema(
+        Method method, Set<String> excludeParams) { ... }
 ```
 
-后者的实现：
+**关键纠正**（与之前报告相比）：
+- **不存在** `generate(Method)` 重载
+- **不存在** `generate(Class<?>)` 重载
+- 工具参数 schema 走 `generateParameterSchema(Method, Set<String>)`
+- **POJO 结构化输出 schema 不通过 `ToolSchemaGenerator`**，而是走 **`JsonSchemaUtils.generateSchemaFromType(...)`**（包私有工具类，`ToolSchemaGenerator` 在 L129 调用）
 
-1. 创建一个 `TypeContext` 指向目标类
-2. 用 `victools` 生成 JSON Schema
-3. 处理 `$ref` 嵌套
-4. 返回 Jackson `JsonNode`
+实际 `ReActAgent.builder().structuredOutput(...)` 流程：
+
+```java
+// 框架内部
+JsonNode schema = JsonSchemaUtils.generateSchemaFromType(structuredOutputClass);  // 不是 ToolSchemaGenerator.generate(...)
+ToolBase soTool = SchemaOnlyTool.builder()...build();
+options = options.withToolChoice(ToolChoice.SPECIFIC(soTool.getName()));
+```
 
 ### 3.3 `Formatter` 实现精要
 

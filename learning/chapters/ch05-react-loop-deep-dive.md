@@ -160,7 +160,7 @@ private Mono<Msg> executeIteration(int iter) {
 }
 ```
 
-`reasoning`（1835 行）做完一次模型推理，**判断要不要进 acting**：
+`reasoning`（L1835-1962）做完一次模型推理，**判断要不要进 acting 的逻辑不在 `reasoning` 内部**，而在后续的 `runPostReasoningPipeline`（L1965-2005）：
 
 ```java
 private Mono<Msg> reasoning(int iter, boolean ignoreMaxIters) {
@@ -178,16 +178,40 @@ private Mono<Msg> reasoning(int iter, boolean ignoreMaxIters) {
             // 2. 累积 + 折叠
             return stream.doOnNext(ev -> { /* 累积到 context */ })
                          .then(Mono.defer(() -> Mono.justOrEmpty(context.buildFinalMessage())));
-        })
-        // 3. 进入 acting 或结束
-        .flatMap(msg -> {
-            if (msg has ToolUseBlock) return acting(iter);
-            else return executeIteration(iter + 1);  // 纯文本：iter+1 再来一次
         });
 }
 ```
 
-**观察 4**：纯文本响应**也会**触发 `iter+1`！这是为了"先 reasoning 再 summarizing"的设计。多次 iter 都被认为是"循环"，最后才 summarize。
+`reasoning` 完成后由 `runPostReasoningPipeline` 决定下一步：
+
+```java
+private Mono<Msg> runPostReasoningPipeline(Msg eventMsg, int iter) {
+    // 关键：先用 isFinished 判断"模型这次响应是否构成终态"
+    if (isFinished(eventMsg)) {
+        return Mono.just(eventMsg);   // 直接返回，不再迭代
+    }
+    return acting(iter);              // 否则进入 acting
+}
+```
+
+`acting`（L2167-2248）内部反过来处理"无待执行工具"的情况：
+
+```java
+private Mono<Msg> acting(int iter) {
+    List<ToolUseBlock> pendingToolCalls = extractPendingToolCalls();
+    if (pendingToolCalls.isEmpty()) {
+        // 没有工具可调 —— 推进到下一轮（这才是"iter+1"真正发生的地方）
+        return executeIteration(iter + 1);
+    }
+    // ...
+    return executeIteration(iter + 1);   // 工具执行完也总是推进一步
+}
+```
+
+**观察 4（修正）**：
+- "是否还要 reason" 的判断**不在 `reasoning` 内部**，而是在 `runPostReasoningPipeline` 中用 `isFinished(eventMsg)` 判定。
+- "iter+1" 真正发生的位置是 **`acting` 的两个返回点**（无工具时、有工具时），不是 `reasoning` 的尾巴。
+- 纯文本响应（没有 ToolUseBlock）走的是 `isFinished` → return 这条快路径，**不会**触发 iter+1。
 
 `acting`（2167 行）：
 
@@ -221,7 +245,10 @@ private Mono<Msg> acting(int iter) {
 
 ### 3.4 `summarizing` 阶段
 
-`ReActAgent.java:2937 summaryModelCallStream`（约 100 行）：
+- `summarizing()` 方法在 **`ReActAgent.java:2838`**（公开方法，做终止判断 + 触发 summary）
+- `summaryModelCallStream(...)` 在 **`ReActAgent.java:2937`**（私有方法，做流式 summary 调用，约 70 行）
+
+两者关系：`summarizing()` → 准备输入 → 调 `summaryModelCallStream(...)` → 折叠流到 `Mono<Msg>`。
 
 - 触发条件：`iter >= maxIters` 或 `RequestStopEvent` 带 `GenerateReason.SUMMARIZE`
 - 行为：**不传 tools**，让模型生成纯文本总结

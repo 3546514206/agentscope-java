@@ -7,18 +7,20 @@
 
 | 状态 | 章节 | 主题 | 预计时长 | 关键源码锚点 |
 |---|---|---|---|---|
-| ✅ | [Ch01](./chapters/ch01-framework-overview.md) | 框架全景与学习地图 | 1.5h | `pom.xml`, `ReActAgent.java:200` |
+| ✅ | [Ch01](./chapters/ch01-framework-overview.md) | 框架全景与学习地图 | 1.5h | `ReActAgent.java:190`（入口）/ `:200`（类声明） |
 | ✅ | [Ch02](./chapters/ch02-reactive-foundation.md) | 反应式编程基石 | 2.5h | `ReActAgent.java` 全文 Reactor 链 |
-| ✅ | [Ch03](./chapters/ch03-message-and-block.md) | 消息模型 `Msg` 与 `ContentBlock` | 2h | `message/Msg.java:842` |
-| ✅ | [Ch04](./chapters/ch04-agent-and-state.md) | Agent 抽象与 `AgentState` | 2h | `agent/Agent.java:114`, `agent/AgentBase.java:1035` |
-| ✅ | [Ch05](./chapters/ch05-react-loop-deep-dive.md) | ReAct 主循环源码精读 | 3h | `ReActAgent.java:769, 1835, 2167, 2937` |
+| ✅ | [Ch03](./chapters/ch03-message-and-block.md) | 消息模型 `Msg` 与 `ContentBlock` | 2h | `message/Msg.java:842`（9 种 ContentBlock） |
+| ✅ | [Ch04](./chapters/ch04-agent-and-state.md) | Agent 抽象与 `AgentState` | 2h | `agent/Agent.java:47`, `agent/AgentBase.java:1035` |
+| ✅ | [Ch05](./chapters/ch05-react-loop-deep-dive.md) | ReAct 主循环源码精读 | 3h | `ReActAgent.java:1835 reasoning` / `:2167 acting` / `:2838 summarizing` |
 | ✅ | [Ch06](./chapters/ch06-toolkit-and-function-calling.md) | 工具调用与反射 | 3h | `tool/Toolkit.java:1031`, `tool/ReflectiveFunctionTool.java` |
 | ✅ | [Ch07](./chapters/ch07-memory-and-persistence.md) | 记忆与持久化 | 2.5h | `state/AgentState.java`, `memory/` |
 | ✅ | [Ch08](./chapters/ch08-middleware-and-hooks.md) | 中间件与 Hook 系统 | 2.5h | `middleware/MiddlewareChain.java`, `hook/Hook.java` |
 | ✅ | [Ch09](./chapters/ch09-structured-output-and-formatter.md) | 结构化输出与 Formatter | 2h | `formatter/`, `model/StructuredOutputReminder.java` |
-| ✅ | [Ch10](./chapters/ch10-multi-agent-and-harness.md) | 多 Agent 与 `HarnessAgent` | 3h | `agentscope-harness/agent/HarnessAgent.java` |
+| ✅ | [Ch10](./chapters/ch10-multi-agent-and-harness.md) | 多 Agent 与 `HarnessAgent` | 3h | `agentscope-harness/agent/HarnessAgent.java:2251 行` |
 | ✅ | [Ch11](./chapters/ch11-mcp-a2a-protocols.md) | MCP / A2A 协议（进阶） | 2.5h | `tool/mcp/`, `extensions-nacos/` |
 | ✅ | [Ch12](./chapters/ch12-production-observability.md) | 生产化与可观测性（进阶） | 2.5h | `tracing/`, `shutdown/`, `permission/` |
+
+> **2026-06-29 核验完成**：通过 3 个 Explore agent 核对了 67 个声明点，修复 13 处 A 类严重错误 + 13 处 B 类行号/方法名错。详细核验报告见 `~/.claude/plans/vivid-launching-liskov.md`。
 
 > 状态标记：🔲 未开始 / 🟡 进行中 / ✅ 已完成（当前为**初始化版本**，每章学习时把对应状态改为 🟡 或 ✅）
 

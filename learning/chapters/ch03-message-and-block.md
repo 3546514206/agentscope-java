@@ -5,7 +5,7 @@
 ## 1. 本章目标
 
 - 掌握 `Msg` 不可变聚合根的设计
-- 区分 12 种 `ContentBlock` 各自的使用场景
+- 区分 **9 种** `ContentBlock` 各自的使用场景
 - 理解 `metadata` 通道（`MessageMetadataKeys`）的扩展机制
 - 能用 Builder 拼出含**多模态 + 工具调用**的复杂消息
 
@@ -52,9 +52,11 @@ public enum MsgRole {
 
 `TOOL` 是一个特殊角色 —— `ToolResultMessage` 实际是 `Msg` 的视图（看 `ToolResultMessage.java:92`），内部存的是 `ToolResultBlock`，role = TOOL。
 
-### 2.3 12 种 ContentBlock
+### 2.3 **9 种** ContentBlock（外加 2 种 Source）
 
 读 `agentscope-core/src/main/java/io/agentscope/core/message/`：
+
+**ContentBlock 子类（9 种）**：
 
 | Block | 用途 | 关键字段 |
 |---|---|---|
@@ -66,9 +68,16 @@ public enum MsgRole {
 | `ThinkingBlock` | 模型思维链 | `thinking` |
 | `ToolUseBlock` | 模型发起的工具调用 | `id`, `name`, `input: Map` |
 | `ToolResultBlock` | 工具执行结果 | `toolCallId`, `output: List<ContentBlock>`, `isError` |
+| `HintBlock` | 提示/注入块 | `hint`（框架内部使用） |
+
+**Source 子类（2 种，不是 ContentBlock）**：
+
+| Source | 用途 | 关键字段 |
+|---|---|---|
 | `Base64Source` | 内联二进制源 | `data: byte[]`, `mimeType` |
 | `URLSource` | URL 引用源 | `url` |
-| `HintBlock` | 提示/注入块 | `hint`（框架内部使用） |
+
+**关键纠正**：之前报告写"12 种 ContentBlock"是错的 —— 实际 **9 种 ContentBlock + 2 种 Source**。`Base64Source` / `URLSource` 是 `ImageBlock.source` 等字段的类型，不是 ContentBlock 子类。
 
 ### 2.4 metadata 扩展通道
 
@@ -96,7 +105,7 @@ public final class MessageMetadataKeys {
 
 ### 3.1 `Msg` 的不可变性
 
-读 `agentscope-core/src/main/java/io/agentscope/core/message/Msg.java:1-200`：
+读 `agentscope-core/src/main/java/io/agentscope/core/message/Msg.java`：
 
 ```java
 public final class Msg {
@@ -107,26 +116,32 @@ public final class Msg {
     private final Map<String, Object> metadata;
     // ...
 
-    // 关键：所有"修改"返回新对象
-    public Msg withTextContent(String text) {
-        return new Msg(id, role, name, List.of(TextBlock.builder().text(text).build()), metadata);
+    // 关键：通过 Builder 构造（不可变类没有 withXxx 工厂）
+    public static class Builder {
+        public Builder textContent(String text) { ... }   // L773
+        public Builder metadata(Map<String,Object> m) { ... }  // L783
+        public Builder content(List<ContentBlock> c) { ... }
+        public Msg build() { ... }
     }
 
-    public Msg withMetadata(String key, Object value) {
-        Map<String, Object> newMeta = new HashMap<>(metadata);
-        newMeta.put(key, value);
-        return new Msg(id, role, name, content, newMeta);
-    }
+    public static Builder builder() { return new Builder(); }
 
-    public Msg withGenerateReason(GenerateReason reason) {
-        return withMetadata(MessageMetadataKeys.GENERATE_REASON, reason);
-    }
+    // 存在的不可变变体方法（仅限少量）
+    public Msg withContent(List<ContentBlock> newContent) { ... }   // L644-663
+    public Msg withGenerateReason(GenerateReason reason) { ... }
+    public Msg withReplyId(String replyId) { ... }
 }
 ```
 
+**关键纠正**（与之前报告相比）：
+- **不存在** `withTextContent(String)` 方法
+- **不存在** `withMetadata(String, Object)` 方法
+- 对应能力通过 **`Builder.textContent(...)`** 和 **`Builder.metadata(...)`** 实现
+- `Msg.java:1-200` 区间是类声明、字段、getter、role 校验，**不包含**上述 Builder 方法（Builder 在文件后段）
+
 **观察 1**：每次"修改"分配新 `List` / `Map`，绝不修改原对象。这让 Agent 的状态天然**线程安全**。
 
-**观察 2**：构造器全 private，外部只能通过 `Builder` 或 `withXxx` 工厂创建。
+**观察 2**：构造器全 private，外部只能通过 `Builder` 创建。
 
 ### 3.2 工具调用的消息结构
 

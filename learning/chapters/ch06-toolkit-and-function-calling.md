@@ -156,14 +156,18 @@ public void registerTool(Object toolObject) {
 
 ### 3.2 `ToolSchemaGenerator` 的注解支持
 
-`ToolSchemaModule.java:51`：
+`ToolSchemaModule.java:51-62`（实际 123 行）：
 
 ```java
 public void applyToConfigBuilder(SchemaGeneratorConfigBuilder builder) {
-    builder.with(new JacksonModule());           // 支持 @JsonProperty
-    builder.with(new JacksonSchemaExtensionModule());
-    builder.forTypesInGeneral()                  // 全局 option
-        .withDescriptionResolver(...);
+    // 注意：用 forFields()，不是 forTypesInGeneral()
+    this.applyToConfigBuilder(builder.forFields());
+}
+
+private void applyToConfigBuilder(FieldScopeBuilder builder) {
+    // private overload：处理字段级别的 Jackson 注解
+    builder.withDescriptionResolver(...);
+    // 注意：没有直接 new JacksonModule() 调用 —— Jackson 模块通常由外部初始化
 }
 ```
 
@@ -175,23 +179,29 @@ public void applyToConfigBuilder(SchemaGeneratorConfigBuilder builder) {
 
 ### 3.3 `ToolMethodInvoker` 的状态注入
 
-读 `ToolMethodInvoker.java` 关键段：
+读 `ToolMethodInvoker.java`（实际 399 行）关键段：
 
 ```java
-public Object[] bindArguments(Method m, Map<String,Object> input, AgentState state) {
+// 注意：方法名是 convertParameters，不是 bindArguments
+public Object[] convertParameters(Method m, Map<String,Object> input, ToolExecutionContext ctx) {
     List<Object> args = new ArrayList<>();
     for (Parameter p : m.getParameters()) {
         if (AgentState.class.isAssignableFrom(p.getType())) {
-            // stateInjected=true：注入 state
-            args.add(state);
+            // stateInjected=true：注入 state（来源是 ctx.runtimeContext() 或 agent.getAgentState() 兜底）
+            args.add(extractState(ctx));
         } else {
+            // 注意：用 @ToolParam.name()，不是直接 input.get(p.getName())
             String name = p.getAnnotation(ToolParam.class).name();
-            args.add(input.get(name));  // 按名绑定
+            args.add(input.get(name));   // 按名绑定（L291）
         }
     }
     return args.toArray();
 }
 ```
+
+**关键纠正**（与之前报告相比）：
+- 方法名是 `convertParameters`（L149），不是 `bindArguments`
+- 多了 `ToolExecutionContext ctx` 参数，`AgentState` 从 ctx 取，**不是方法直接拿**
 
 **为什么需要 `stateInjected`**：某些工具需要**读写** state（如 `PlanNotebook`、`TodoTools`）。
 

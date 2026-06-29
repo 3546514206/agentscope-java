@@ -58,23 +58,34 @@ graph LR
 
 ### 2.3 `MiddlewareChain.build` 链式构造
 
-读 `middleware/MiddlewareChain.java`：
+读 `middleware/MiddlewareChain.java:46-58`：
 
 ```java
-public static Function<I, Flux<AgentEvent>> build(
-    List<MiddlewareBase> middlewares,
+public static <I> Function<I, Flux<AgentEvent>> build(
+    List<? extends MiddlewareBase> middlewares,         // 注意：List<? extends MiddlewareBase>
     Agent agent,
     RuntimeContext ctx,
-    BiFunction<MiddlewareBase, Function<I, Flux<AgentEvent>>, Function<I, Flux<AgentEvent>>> hook,
+    MiddlewareMethod<I> method,                          // 注意：函数式接口，不是 BiFunction
     Function<I, Flux<AgentEvent>> core
 ) {
     Function<I, Flux<AgentEvent>> chain = core;
     // 反向 wrap：最后一个 middleware 最先包裹
     for (int i = middlewares.size() - 1; i >= 0; i--) {
         MiddlewareBase mw = middlewares.get(i);
-        chain = hook.apply(mw, chain);
+        chain = method.wrap(mw, chain);
     }
     return chain;
+}
+```
+
+`MiddlewareMethod<I>` 是一个**函数式接口**（不是 `BiFunction`），定义：
+
+```java
+@FunctionalInterface
+public interface MiddlewareMethod<I> {
+    Function<I, Flux<AgentEvent>> wrap(
+        MiddlewareBase mw,
+        Function<I, Flux<AgentEvent>> next);
 }
 ```
 
@@ -87,18 +98,28 @@ public static Function<I, Flux<AgentEvent>> build(
 ### 2.4 `onSystemPrompt` 的特殊性
 
 ```java
-default String onSystemPrompt(Agent agent, RuntimeContext ctx, String systemPrompt) {
-    return systemPrompt;  // 透传
+// 注意：返回 Mono<String>，不是 String
+default Mono<String> onSystemPrompt(Agent agent, RuntimeContext ctx, String systemPrompt) {
+    return Mono.just(systemPrompt);  // 默认透传
 }
 ```
 
-这是**唯一**非 Flux 钩子，多个 middleware 串行转换：
+这是**唯一**非 Flux 钩子，多个 middleware 串行转换。**实际组合方式不是 `Stream.reduce`**：
 
 ```java
-// 多个 onSystemPrompt middleware 串行调用
-String final = mwList.stream()
-    .reduce(rawPrompt, (prompt, mw) -> mw.onSystemPrompt(agent, ctx, prompt), String::concat);
+// ReActAgent.applySystemPromptMiddlewares (L558-592)
+Mono<String> result = Mono.just(rawPrompt);
+for (MiddlewareBase mw : middlewares) {
+    result = result.flatMap(p -> mw.onSystemPrompt(this, ctx, p));
+}
+// 最后一个 .block() 同步取结果
+String finalPrompt = result.block();
 ```
+
+**关键纠正**（与之前报告相比）：
+- 返回类型是 `Mono<String>`，**不是** `String`
+- 组合方式用 `for` 循环 + `flatMap`，**不是** `Stream.reduce`
+- 最后一步是 `.block()` 同步取结果（因为 system prompt 在模型调用前必须就绪）
 
 **用途**：
 

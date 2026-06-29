@@ -39,7 +39,7 @@ agentscope-java/
 ├── pom.xml                          # 父 POM，定义 revision / dependencyManagement
 ├── agentscope-core/                 # 引擎本体 (~50 个子包)
 ├── agentscope-harness/              # 整车：workspace + 长期记忆 + 子 Agent + 沙箱
-├── agentscope-extensions/           # 可选扩展（16 个子模块）
+├── agentscope-extensions/           # 可选扩展（15 个子模块）
 │   ├── agentscope-extensions-channel/   # 消息渠道（IM、Webhook）
 │   ├── agentscope-extensions-higress/   # Higress 网关
 │   ├── agentscope-extensions-mem/       # 长期记忆（Redis、MySQL）
@@ -67,9 +67,9 @@ agentscope-java/
 
 | 包 | 一句话职责 | 关键文件 |
 |---|---|---|
-| `ReActAgent.java` | ReAct 循环本体 | `ReActAgent.java:200, 769, 1835, 2167, 2937` |
-| `agent/` | Agent 接口与骨架 | `Agent.java`, `AgentBase.java`, `RuntimeContext.java` |
-| `message/` | 消息模型 | `Msg.java` 842 行 + 12 个 ContentBlock |
+| `ReActAgent.java` | ReAct 循环本体 | `ReActAgent.java:200`（类声明）/ `ReActAgent.java:190`（入口 `call(List<Msg>)`）/ `ReActAgent.java:1835 reasoning` / `ReActAgent.java:2167 acting` / `ReActAgent.java:2838 summarizing` / `ReActAgent.java:2937 summaryModelCallStream` |
+| `agent/` | Agent 接口与骨架 | `Agent.java:47`, `AgentBase.java:91-216`, `RuntimeContext.java` |
+| `message/` | 消息模型 | `Msg.java` 842 行 + **9 种 ContentBlock** |
 | `tool/` | 工具调用体系 | `Toolkit.java` 1031 行 + 30+ 工具相关类 |
 | `model/` | 模型抽象 | `ChatModelBase.java` + 5 家实现 + transport/ |
 | `formatter/` | 多家协议适配 | openai/dashscope/anthropic/gemini/ollama |
