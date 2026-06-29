@@ -58,7 +58,7 @@ graph LR
 
 ### 2.3 `MiddlewareChain.build` 链式构造
 
-读 `middleware/MiddlewareChain.java:46-58`：
+`MiddlewareChain.java` 总共 78 行，`build(...)` 方法精确位置需 `grep -n 'public static.*build'` 自行定位（ch08 之前给的 46-58 行号**未经核验**）。
 
 ```java
 public static <I> Function<I, Flux<AgentEvent>> build(

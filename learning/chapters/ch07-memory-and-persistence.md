@@ -1,12 +1,24 @@
-# Ch07 · 记忆与持久化
+# Ch07 · 持久化（v2 现行范式）+ 旧 v1 长期记忆（已 deprecated）
 
 > 状态：🔲 · 预计时长：2.5h · 前置：Ch06
+
+## ⚠️ 重要：本章范围在 v2 起发生重大变更
+
+**`LongTermMemory` 接口在 v2 起已被声明 `@Deprecated(forRemoval = true, since = "2.0.0")`**（见 `agentscope-core/src/main/java/io/agentscope/core/memory/LongTermMemory.java` 顶部注释）：
+
+> "Long-term memory is removed; conversation context now lives on `AgentState#getContext()`. Integrate any cross-session persistence at the application layer."
+
+也就是说：
+
+- v2 起**框架级长期记忆抽象已废弃**，未来版本将彻底删除
+- 跨会话持久化**由应用层自己实现**（用 `AgentStateStore` + `StateBackedMemory` 之类）
+- 本章按"持久化（v2 现行）→ 旧 v1 长期记忆（已 deprecated）"两部分组织
 
 ## 1. 本章目标
 
 - 理解 `AgentStateStore` 抽象与两个内置实现（`InMemoryAgentStateStore` / `JsonFileAgentStateStore`）
 - 理解 v1 `Memory` → v2 `AgentState` 的迁移路径
-- 掌握 `LongTermMemory` 与 `LongTermMemoryMode` 三种模式
+- ~~掌握 `LongTermMemory` 与 `LongTermMemoryMode` 三种模式~~ **（已 deprecated，仅作历史背景）**
 - 掌握 `StateBackedMemory` 适配器（旧接口兼容）
 
 ## 2. 核心概念
@@ -74,15 +86,20 @@ public interface AgentStateStore {
 - 用 Jackson 序列化整个 `AgentState`
 - 单机部署可用
 
-**默认路径结构**：
+**默认路径结构**（**注意：没有 `<agentId>` 段**）：
 
 ```
 ~/.agentscope/state/
-└── <agentId>/
-    └── <userId>/
-        └── <sessionId>/
-            └── agent_state.json
+└── <userId>/
+    └── <sessionId>/
+        └── <key>.json
 ```
+
+**关键纠正（与之前报告相比）**：
+- 路径只有 `<userId>/<sessionId>/<key>.json` 三段，**没有 `<agentId>` 段**
+- `<key>` 对应 `save(userId, sessionId, key, value)` 方法的 `key` 参数（默认是 `"agent_state"`）
+
+**为什么没有 `<agentId>`**：`JsonFileAgentStateStore` 不知道也不关心"哪个 agent 在用"——它只按 `(userId, sessionId, key)` 三个维度组织数据。如果想按 agent 隔离，由 `key` 命名空间（`my_agent:agent_state`）自己处理。
 
 #### `RedisAgentStateStore`（extensions-redis）
 
@@ -118,11 +135,14 @@ public class StateBackedMemory implements Memory {
 }
 ```
 
-### 2.5 `LongTermMemory` 长期记忆
+### 2.5 ⚠️ 旧 v1 `LongTermMemory` 长期记忆（**已 deprecated**）
 
-`memory/LongTermMemory.java:71`：
+> **本节仅作历史背景**——v2 起新代码不应再用此 API。
+
+`memory/LongTermMemory.java:71`（接口**本身**）：
 
 ```java
+@Deprecated(forRemoval = true, since = "2.0.0")
 public interface LongTermMemory {
     Mono<Void> record(List<Msg> msgs);     // 记录一条或多条事实（接收 List，不是单条）
     Mono<String> retrieve(Msg msg);         // 语义检索（入参是 Msg，输出 String）
@@ -134,30 +154,42 @@ public interface LongTermMemory {
 - `record` 接 `List<Msg>`，不是 `Msg`
 - `retrieve` 接 `Msg` 返回 `Mono<String>`，不是 `Flux<Knowledge>` 也不是 `(String, int)`
 - **没有 `clear()` 方法**
+- **整个接口 `@Deprecated forRemoval`** —— 见接口顶部的 Javadoc
 
-**实现位置**：
+**实现位置（历史，已不推荐）**：
 
 - `agentscope-extensions/agentscope-extensions-mem/agentscope-extensions-mem0/`
 - `agentscope-extensions/agentscope-extensions-mem/agentscope-extensions-memory-bailian/`
 - `agentscope-extensions/agentscope-extensions-mem/agentscope-extensions-reme/`
 
-### 2.6 `LongTermMemoryMode` 三种模式
+**对应 `Builder.longTermMemory(LongTermMemory)` 和 `Builder.longTermMemoryMode(LongTermMemoryMode)`**（`ReActAgent.java:3929`, `:3938`）**也都标注 `@Deprecated since 2.0.0`**。
 
-`memory/LongTermMemoryMode.java:54`：
+### 2.6 ⚠️ 旧 v1 `LongTermMemoryMode` 三种模式（**已 deprecated**）
+
+> **本节仅作历史背景**——v2 起新代码不应再用此 API。
+
+`memory/LongTermMemoryMode.java:54`（**枚举类声明**）：
 
 ```java
+// L54 是 enum 声明
 public enum LongTermMemoryMode {
-    AGENT_CONTROL,   // Agent 通过工具自主管理（注册 LongTermMemoryTools）
-    STATIC_CONTROL,  // 框架自动管理（StaticLongTermMemoryHook）
-    BOTH             // 二者结合（推荐）
+    AGENT_CONTROL,   // L59
+    STATIC_CONTROL,  // L64
+    BOTH             // L69
 }
 ```
 
-| 模式 | Agent 能调用工具吗 | 框架自动记录吗 | 适用 |
-|---|---|---|---|
-| `AGENT_CONTROL` | ✅ | ❌ | 高级 Agent，模型理解何时该记 |
-| `STATIC_CONTROL` | ❌ | ✅ | 简单场景，强制全量记录 |
-| `BOTH` | ✅ | ✅ | **推荐默认** |
+**关键纠正**：
+- L54 是 `enum` 类声明行，**实际枚举常量在 L59 / L64 / L69**
+- 整个枚举配套 `LongTermMemory` 接口**一起进入 deprecated 通道**
+
+| 模式 | Agent 能调用工具吗 | 框架自动记录吗 | 适用 | 状态 |
+|---|---|---|---|---|
+| `AGENT_CONTROL` | ✅ | ❌ | 高级 Agent，模型理解何时该记 | **deprecated** |
+| `STATIC_CONTROL` | ❌ | ✅ | 简单场景，强制全量记录 | **deprecated** |
+| `BOTH` | ✅ | ✅ | 旧版"推荐默认" | **deprecated** |
+
+**v2 推荐的迁移路径**：跨会话持久化用 `AgentStateStore`（`JsonFileAgentStateStore` / `RedisAgentStateStore` / `MySQLAgentStateStore` 等等），按 `(userId, sessionId, key)` 维度组织数据；语义检索需求用 RAG 扩展（`agentscope-extensions-rag`）替代。
 
 ## 3. 源码精读
 
@@ -201,7 +233,7 @@ public void save(String userId, String sessionId, String key, State value) {
 - `toolContext: ToolContextState`
 - `tasksContext: TaskContextState`
 
-### 3.3 `StaticLongTermMemoryHook` 自动记录
+### 3.3 ⚠️ 旧 v1 `StaticLongTermMemoryHook` 自动记录（**已 deprecated**）
 
 `memory/StaticLongTermMemoryHook.java`（实际 300 行，已 `@Deprecated(forRemoval = true, since = "2.0.0")`）：
 
@@ -241,7 +273,7 @@ public class StaticLongTermMemoryHook implements Hook {
 | `State` 接口做标记 | 多态序列化 |
 | 文件路径默认 `~/.agentscope/state/...` | 跨平台、隔离 workspace |
 | 写时复制 + 原子重命名 | 防止崩溃损坏 |
-| LongTermMemory 三种模式 | 灵活度 vs 自动化 |
+| ~~LongTermMemory 三种模式~~ | ~~灵活度 vs 自动化~~ **（v2 起整个机制 deprecated）** |
 | 持久化放 store 不放 Agent | Agent 是无状态的，可水平扩展 |
 
 ## 5. 实验任务

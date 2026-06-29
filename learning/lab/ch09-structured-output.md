@@ -68,12 +68,18 @@ public class Order {
 ```java
 package lab;
 
-import io.agentscope.core.tool.ToolSchemaGenerator;
+import io.agentscope.core.util.JsonSchemaUtils;     // ← 改用 JsonSchemaUtils，不用 ToolSchemaGenerator
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Map;
 
 public class SchemaGen {
-    public static void main(String[] args) {
-        JsonNode schema = ToolSchemaGenerator.generate(Order.class);
+    public static void main(String[] args) throws Exception {
+        // 注意：ToolSchemaGenerator.generate(Class) 重载不存在
+        // 正确方法：JsonSchemaUtils.generateSchemaFromClass(Class<?>)
+        Map<String, Object> schemaMap = JsonSchemaUtils.generateSchemaFromClass(Order.class);
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode schema = mapper.valueToTree(schemaMap);
         System.out.println(schema.toPrettyString());
     }
 }
@@ -192,8 +198,17 @@ public class StructuredOutput {
 
 **注意**：本实验用 `ScriptedModel` 模拟"完美输出"，实际生产中：
 
-- 用 `ReActAgent.builder().structuredOutput(Order.class).build()` 替代
-- 框架会**自动**注册虚拟工具 `generate_response` 或设置 `response_format`
+- ⚠️ **`ReActAgent.Builder.structuredOutput(Class)` 方法不存在！**（之前报告里"自动注册虚拟工具"是推测）
+- 实际 API 是 `call(List<Msg>, Class<?>, RuntimeContext)`：
+
+```java
+// 正确用法：用 call() 的 Class<?> 重载
+Order order = agent.call(userMsg, Order.class, ctx)
+    .map(msg -> mapper.readValue(msg.getTextContent(), Order.class))
+    .block();
+```
+
+- 框架会**自动**注册虚拟工具 `generate_response` 或设置 `response_format`（内部走 `doCall(msgs, Class<?>)`，`ReActAgent.java:954`）
 - 解析失败会自动**重试**
 
 ## 实验 4：完整结构化输出（生产用法）
@@ -203,11 +218,11 @@ ReActAgent agent = ReActAgent.builder()
     .name("order-extractor")
     .sysPrompt("从用户输入抽取订单信息。")
     .model(realChatModel)
-    .structuredOutput(Order.class)   // 框架接管一切
+    // .structuredOutput(Order.class)  ← 这个方法不存在！删掉
     .build();
 
-// 直接拿 POJO
-Order order = agent.call(userMsg, ctx)
+// 直接拿 POJO —— 用 call 的 Class<?> 重载
+Order order = agent.call(userMsg, Order.class, ctx)         // ← 注意第二参数是 Class<?>
     .map(msg -> mapper.readValue(msg.getTextContent(), Order.class))
     .block();
 ```

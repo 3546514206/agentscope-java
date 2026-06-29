@@ -160,7 +160,9 @@ private Mono<Msg> executeIteration(int iter) {
 }
 ```
 
-`reasoning`（L1835-1962）做完一次模型推理，**判断要不要进 acting 的逻辑不在 `reasoning` 内部**，而在后续的 `runPostReasoningPipeline`（L1965-2005）：
+`reasoning`（L1835-1962）做完一次模型推理，**判断要不要进 acting 的逻辑不在 `reasoning` 内部**，而在后续的 `runPostReasoningPipeline`（L1965-2005）；
+
+**重要**：`coreAgent()`（L1809）→ `executeIteration(int)`（L1821）→ `reasoning(int, false)`（L1835）的链路中，**还夹着一个 `resumeAgent()`**（约 L1813-1815）—— 这是"上次有 pending tool calls"时的快速恢复路径，**不重新 reason，直接跳到 acting**。Ch05 之前报告里漏了这个恢复分支。
 
 ```java
 private Mono<Msg> reasoning(int iter, boolean ignoreMaxIters) {
@@ -246,7 +248,7 @@ private Mono<Msg> acting(int iter) {
 ### 3.4 `summarizing` 阶段
 
 - `summarizing()` 方法在 **`ReActAgent.java:2838`**（公开方法，做终止判断 + 触发 summary）
-- `summaryModelCallStream(...)` 在 **`ReActAgent.java:2937`**（私有方法，做流式 summary 调用，约 70 行）
+- `summaryModelCallStream(...)` 在 **`ReActAgent.java:2937`**（私有方法，做流式 summary 调用，约 70 行起；精确长度需 `awk` 度量，未核验）
 
 两者关系：`summarizing()` → 准备输入 → 调 `summaryModelCallStream(...)` → 折叠流到 `Mono<Msg>`。
 

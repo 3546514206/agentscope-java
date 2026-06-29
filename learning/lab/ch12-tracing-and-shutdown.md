@@ -59,20 +59,22 @@ public class TraceDemo {
         // 这里是简化版 Hook 演示
         Hook traceHook = new Hook() {
             @Override public String getName() { return "trace"; }
+
+            // 正确签名：<T extends HookEvent> Mono<T> onEvent(T event) —— 单参数泛型
+            // 之前报告里写的 onEvent(AgentEvent event, HookEventType type) 双参数不能编译
             @Override
-            public Mono<HookEvent> onEvent(AgentEvent event, HookEventType type) {
+            public <T extends HookEvent> Mono<T> onEvent(T event) {
+                String evName = event.getClass().getSimpleName();
                 return Mono.fromRunnable(() -> {
                     try {
                         String line = String.format(
-                            "{\"type\":\"%s\",\"event\":\"%s\"}",
-                            type, event.getClass().getSimpleName()
-                        );
+                            "{\"event\":\"%s\"}", evName);
                         Files.writeString(traceFile, line + "\n",
                             StandardOpenOption.CREATE, StandardOpenOption.APPEND);
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
-                }).then(Mono.just(new HookEvent(event, type)));
+                }).then(Mono.just(event));
             }
         };
 
@@ -213,22 +215,28 @@ public class GracefulShutdownDemo {
 [t1] done.
 ```
 
-## 实验 3：STRICT 模式权限
+## 实验 3：BYPASS 模式权限（注意：没有 STRICT 模式）
 
 ```java
-PermissionContextState strictCtx = PermissionContextState.builder()
-    .mode(PermissionMode.STRICT)
+PermissionContextState ctx = PermissionContextState.builder()
+    .mode(PermissionMode.BYPASS)              // ← 没有 STRICT 模式！用 BYPASS 替代
     .build();
 
-// 任何工具调用都会先 ASK
-// Agent 会进入 RequireUserConfirmEvent
+// BYPASS 模式：绕过所有权限检查
+// （慎用：仅在受控环境/测试用）
+
+// 对比：
+// - DEFAULT:  按 ask 规则与工具自检判定
+// - ACCEPT_EDITS:  自动接受编辑类工具
+// - EXPLORE:  只读工具全部 ALLOW
+// - BYPASS:  绕过所有检查
+// - DONT_ASK:  不询问（按 deny/allow 规则判定）
 ```
 
 **观察**：
 
-- 所有工具调用都触发 `RequireUserConfirmEvent`
-- 用户必须用 `ConfirmResult` 回应
-- 不回应 → Agent 暂停 + state 保存 `shutdownInterrupted`-like 状态
+- BYPASS 模式下所有工具调用都直接通过
+- 如果要"每个工具都要求确认"，用 `DONT_ASK` 模式（把 ask 决策降级为 deny），或注册 `PermissionRule` 强制 ask
 
 ## 验收标准
 

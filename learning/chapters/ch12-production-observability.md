@@ -276,7 +276,7 @@ public class PermissionEngine {
 
 - `docs/v2/en/docs/others/going-to-production.md`（约 480 行，**必读**）
 - OpenTelemetry Java SDK：<https://opentelemetry.io/docs/languages/java/>
-- Jaeger：<https://www.jaegertracing.io/
+- Jaeger：<https://www.jaegertracing.io/>
 - 优雅停机模式：<https://learnk8s.io/graceful-shutdown>
 
 ## 8. 学习笔记

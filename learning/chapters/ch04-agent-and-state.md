@@ -48,37 +48,44 @@ public interface Agent
 
 ### 2.2 `AgentBase` 的通用能力
 
-读 `agentscope-core/src/main/java/io/agentscope/core/agent/AgentBase.java:91-216`：
+读 `agentscope-core/src/main/java/io/agentscope/core/agent/AgentBase.java:92`（**类声明**）：
 
 ```java
+// AgentBase.java:92 - 类声明
 public abstract class AgentBase implements Agent {
+
     // 1. 身份字段
     protected final String agentId;
     protected final String name;
     protected final String description;
 
     // 2. Hook 列表（不是 HookDispatcher）
-    private final List<Hook> hooks = new CopyOnWriteArrayList<>();
-    private final List<Hook> systemHooks = new CopyOnWriteArrayList<>();
-    private final List<HubSubscriber> hubSubscribers = new CopyOnWriteArrayList<>();
+    private final List<Hook> hooks;
+    private static final List<Hook> systemHooks = new CopyOnWriteArrayList<>();
+    private final Map<String, List<AgentBase>> hubSubscribers = new ConcurrentHashMap<>();
 
-    // 3. 同 key 串行化（用 Mono<Void> 信号量实现）
+    // 3. 同 key 串行化（用 Mono<Void> 链式追加实现，不是 Semaphore）
     private final ConcurrentMap<Object, Mono<Void>> callGates = new ConcurrentHashMap<>();
-    private final Comparator<Hook> HOOK_COMPARATOR = ...;
     private final List<Hook> runtimeContextAwareHooks = new CopyOnWriteArrayList<>();
+    // （L92-110 范围都是字段声明，方法从 L120+ 才开始）
 
-    // 4. 关键方法：callInternal 默认实现（**非 abstract**）
-    protected Mono<Msg> callInternal(...) { /* 模板 */ }
+    // 4. 关键方法：runLifecycle 模板（**抽象**）
+    protected abstract Mono<Msg> runLifecycle(List<Msg> msgs, Function<List<Msg>, Mono<Msg>> doCallFn);
+    // 实际是 protected 而非 abstract —— 但每个子类必须实现
 
-    public final Mono<Msg> call(Msg msg, RuntimeContext rc) {
-        // 用 serializeOnKey(rc) 把同 key 的 call 串行化
-        return serializeOnKey(...)
-            .then(Mono.defer(() -> /* 实际核心逻辑 */));
-    }
+    // 5. callInternal **没有默认实现**（由各子类按需覆盖）
+    //   ReActAgent.java:769 才有 5 行的具体实现
+    protected Mono<Msg> callInternal(List<Msg> msgs, RuntimeContext context, Function<List<Msg>, Mono<Msg>> doCallFn) { ... }
 }
 ```
 
-**关键观察 1**：`call` 方法是 `final` 模板方法；`callInternal` **有默认实现**（L210-216），子类**不强制**重写。这是 Template Method 模式的应用。
+**关键纠正（与之前报告相比）**：
+
+- **L91-216 不是"通用能力"**——L91 是 Javadoc 收尾段（`* }` 之类），L92 才是类声明。整个 AgentBase 通用能力分布在 **L92-1050**（共 1035 行），不要按 91-216 这段去找
+- **没有"callInternal 默认实现（L210-216）"**——`AgentBase` 中没有 L210-216 的默认 `callInternal`；实际是 `ReActAgent.java:769` 才有 5 行具体实现
+- `callGates` **不是 Semaphore**，是 `ConcurrentMap<Object, Mono<Void>>`（每个 key 持一个 `Mono<Void>` 链）
+
+**关键观察 1**：`call` 方法是 `final` 模板方法（位于 `AgentBase`，约 L630-660 范围）；`callInternal` 由各子类按需覆盖。这是 Template Method 模式的应用。
 
 **关键观察 2**：**状态加载不在 `AgentBase` 内部** —— `eventEmitter` / `HookDispatcher` / `stateStore` / `stateCache` 这些字段都**在 `ReActAgent` 内部**（详见 §3.1）。`AgentBase` 只关心 Hook 列表和同 key 串行化。
 
@@ -142,7 +149,7 @@ public class RuntimeContext {
 
 - 框架**不**在 Agent 实例里保存 `userId` —— 因为一个 Agent 实例服务多个用户
 - 每次 `call` 通过 `RuntimeContext` 传递身份信息
-- `AgentBase.loadOrCreateState(rc)` 根据 `rc` 查找对应 state
+- 状态查找实际是 **`ReActAgent.loadOrCreateAgentStateForSlot`（`ReActAgent.java:357`）**—— 注意**不在 `AgentBase`**；`AgentBase` 只管"按 key 串行化"，不管"按 key 加载 state"
 
 ### 2.5 `UserAgent` —— 一个具体的多 Agent 例子
 

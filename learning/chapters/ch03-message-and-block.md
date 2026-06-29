@@ -33,9 +33,10 @@ graph TB
 
 **关键设计判断**：
 
-- `Msg` **不可变**（所有字段 `final`），任何"修改"都返回新对象（`withTextContent` / `withMetadata` 等）
+- `Msg` **不可变**（所有字段 `final`），任何"修改"都返回新对象（`withContent` / `withGenerateReason` / `withReplyId` 等）
 - 一个 `Msg` 含**多个** `ContentBlock`（一次响应可以同时含文本 + 工具调用）
 - 元数据通过 `Map<String, Object>` 扩展，键名集中在 `MessageMetadataKeys`
+- **`ContentBlock` 是 `sealed class`（`ContentBlock.java:58`）**——只有固定的 9 个 `final` 子类，**Java 17 sealed 特性**。这意味着：想新增一种 `ContentBlock` 必须修改父类的 `permits` 列表，**不是普通抽象类**
 
 ### 2.2 角色枚举
 
@@ -109,27 +110,28 @@ public final class MessageMetadataKeys {
 
 ```java
 public final class Msg {
+    // 1. 不可变字段
     private final String id;
     private final MsgRole role;
     private final String name;
     private final List<ContentBlock> content;
     private final Map<String, Object> metadata;
-    // ...
+    // （共 5 个 final 字段，分布在 Msg.java 前段）
 
-    // 关键：通过 Builder 构造（不可变类没有 withXxx 工厂）
+    // 2. Builder（L773 起步，在文件后段）
     public static class Builder {
-        public Builder textContent(String text) { ... }   // L773
-        public Builder metadata(Map<String,Object> m) { ... }  // L783
-        public Builder content(List<ContentBlock> c) { ... }
+        public Builder textContent(String text) { ... }            // 文本快路径
+        public Builder content(List<ContentBlock> c) { ... }      // 多模态完整内容
+        public Builder metadata(Map<String,Object> m) { ... }
         public Msg build() { ... }
     }
 
     public static Builder builder() { return new Builder(); }
 
-    // 存在的不可变变体方法（仅限少量）
-    public Msg withContent(List<ContentBlock> newContent) { ... }   // L644-663
-    public Msg withGenerateReason(GenerateReason reason) { ... }
-    public Msg withReplyId(String replyId) { ... }
+    // 3. 不可变变体（注意：只有这 3 个，没有 withTextContent）
+    public Msg withContent(List<ContentBlock> newContent) { ... }   // L663
+    public Msg withGenerateReason(GenerateReason reason) { ... }    // L644
+    public Msg withReplyId(String replyId) { ... }                  // L657
 }
 ```
 
@@ -137,7 +139,7 @@ public final class Msg {
 - **不存在** `withTextContent(String)` 方法
 - **不存在** `withMetadata(String, Object)` 方法
 - 对应能力通过 **`Builder.textContent(...)`** 和 **`Builder.metadata(...)`** 实现
-- `Msg.java:1-200` 区间是类声明、字段、getter、role 校验，**不包含**上述 Builder 方法（Builder 在文件后段）
+- `Msg.java` **842 行** 的实际分布：1-200 主要是类声明 + 5 个字段 + 多个 `getXxx()`/`fromXxx()` 工厂；200-640 是 `MsgRole` 校验、`metadata` 序列化等方法；640-770 是 `withXxx` 变体（**只 3 个**）；**773 起是 Builder**（约 70 行）
 
 **观察 1**：每次"修改"分配新 `List` / `Map`，绝不修改原对象。这让 Agent 的状态天然**线程安全**。
 

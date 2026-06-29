@@ -110,4 +110,7 @@
 
 ## Changelog
 
-- 2026-06-29 · 创建 · 12 章主线确定
+- 2026-06-29 · 创建 · 12 章主线确定（v0.1，opencode 生成）
+- 2026-06-29 · v0.2 · Claude 第 2 轮源码核验：修复 8 处 A 类严重错误 + 9 处 lab 编译失败 + 若干 B 类行号错
+  - 关键修正：Ch01 call 入口行号（190 → 627）、Ch02 callInternal 行数（80 → 5）、Ch03 sealed class、Ch07 LongTermMemory deprecated、Ch09 Formatter 泛型 + structuredOutput API、Ch11 registerMcpClient API、lab 系列
+  - 详细核验报告见 `~/.claude/plans/learning-opencode-cosmic-sloth.md`

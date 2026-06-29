@@ -140,18 +140,22 @@ public class SubAgentTool extends ToolBase {
 
 ### 3.2 `HarnessAgent` 的实际结构
 
-`harness/agent/HarnessAgent.java` 实际 **2251 行**（不是 ~200 行），关键字段（L146-167）：
+`harness/agent/HarnessAgent.java` 实际 **2251 行**（**注意：之前 ch01 报告里写的"约 200 行"是错的**），关键字段（L146-180 范围）：
 
 ```java
+// HarnessAgent.java:146 - 类声明
 public class HarnessAgent implements Agent, AutoCloseable {
+
+    private static final Logger log = LoggerFactory.getLogger(HarnessAgent.class);
+
     // 1. 核心：装饰一个 ReActAgent
     private final ReActAgent delegate;        // 注意：字段名是 delegate，不是 coreAgent
 
     // 2. 工作区
     private final WorkspaceManager workspaceManager;
-    private final WorkspaceFactory workspaceFactory;
-    private final int ownedWorkspaceIndex;
-    private final DefaultSandboxContext defaultSandboxContext;
+    private final BiFunction<String, String, WorkspaceManager> workspaceFactory;
+    private final WorkspaceIndex ownedWorkspaceIndex;
+    private final SandboxContext defaultSandboxContext;
 
     // 3. 压缩与沙箱
     private final CompactionMiddleware compactionHook;   // 注意：是 Middleware，不是 Config
@@ -167,18 +171,19 @@ public class HarnessAgent implements Agent, AutoCloseable {
 
     // 5. 其它
     private final MemoryConfig memoryConfig;
-    private final SubagentMiddleware subagentMiddleware;
+    private final Object subagentMiddleware;  // SubagentsMiddleware 或 DynamicSubagentsMiddleware
     private final DistributedStore distributedStore;
     private final WorkspacePathNormalizer pathNormalizer;
-    // ...
+    // 等等（L180+ 还有很多）
 }
 ```
 
 **关键纠正**：
-- **字段名是 `delegate`**，不是 `coreAgent`。
-- **没有** `Path workspace` / `AbstractFilesystem filesystem` 直接字段 —— 这两个能力由 `WorkspaceManager`/`WorkspaceFactory` 持有。
-- `CompactionConfig` **不存在**，实际是 `CompactionMiddleware`（压缩跑在中间件层）。
-- 实际工程能力远多于此：技能晋升/审计/使用追踪、PlanMode、分布式存储、路径标准化等都各自有专门组件。
+- **字段名是 `delegate`**，不是 `coreAgent`
+- **没有** `Path workspace` / `AbstractFilesystem filesystem` 直接字段 —— 这两个能力由 `WorkspaceManager`/`WorkspaceFactory` 持有
+- `CompactionConfig` **不存在**，实际是 `CompactionMiddleware`（压缩跑在中间件层）
+- 之前报告说"关键字段在 L146-167"——**实际字段范围更广，约 L146-180**（含 18+ 个字段）
+- 之前 ch01 报告说"约 200 行"——**实际 2251 行**（前后矛盾）
 
 ### 3.3 远程 SubAgent 与 A2A 协议
 

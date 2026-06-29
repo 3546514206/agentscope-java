@@ -71,11 +71,24 @@ public class ReactLoop {
     // ============ EchoTool ============
     public static class EchoTool extends ToolBase {
         public EchoTool() {
+            // 注意：9 参数顺序是 (name, desc, schema, readOnly, concurrencySafe, mcp, mcpName, externalTool, stateInjected)
+            // 之前报告里写的 (name, desc, schema, true, true, false, null, false, false) 顺序错了
+            // 正确顺序：mcp 必须先于 mcpName；externalTool 在 stateInjected 之前
             super("echo", "echoes back the input",
                 Map.of("type", "object",
                        "properties", Map.of("text", Map.of("type", "string")),
                        "required", List.of("text")),
-                true, true, false, null, false, false);
+                true,    // readOnly
+                true,    // concurrencySafe
+                false,   // mcp
+                null,    // mcpName
+                false,   // externalTool
+                false);  // stateInjected
+            // 业务上更推荐 Builder 写法：
+            // super(ToolBase.builder()
+            //     .name("echo").description("echoes back the input")
+            //     .inputSchema(schema).readOnly(true).concurrencySafe(true)
+            //     .build());
         }
 
         @Override

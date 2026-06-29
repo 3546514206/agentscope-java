@@ -148,31 +148,62 @@ Mono<Msg> m = Mono.deferContextual(ctx -> {
 
 ### 3.1 `ReActAgent.java` 中的反应式骨架
 
-读 `ReActAgent.java:769 callInternal`（约 80 行），注意以下结构：
+读 `ReActAgent.java:769 callInternal`（**实际只有 5 行**：它只是把 `buildAgentStream` 流过滤成 `Mono<Msg>`）：
 
 ```java
-protected Mono<Msg> callInternal(AgentState state, Msg msg, RuntimeContext rc) {
-    // 1. 准备阶段：fire PreHook（同步）
-    return hookDispatcher.firePreCall(state, rc, msg)
-        // 2. 加载/合并系统消息
-        .then(Mono.defer(() -> {
-            // 3. 拼装迭代入口
-            return reasoning(0, false);   // 4. 这里是 Mono<Msg>
-        }))
-        // 5. 错误兜底
-        .onErrorResume(...)
-        // 6. 清理
-        .doFinally(...)
-        // 7. 包装成单值
-        .single();
+// ReActAgent.java:769-775 实际源码
+@Override
+protected Mono<Msg> callInternal(
+        List<Msg> msgs, RuntimeContext context, Function<List<Msg>, Mono<Msg>> doCallFn) {
+    return buildAgentStream(msgs, context, doCallFn)
+            .filter(e -> e instanceof AgentResultEvent)
+            .cast(AgentResultEvent.class)
+            .map(AgentResultEvent::getResult)
+            .takeLast(1)
+            .next();
 }
 ```
 
-**观察 1**：`firePreCall` 走的是 Hook 系统（事件订阅），而 `reasoning` 走的是 Middleware 链（包裹），两者在反应式管线中**位置不同**。
+**真正的"约 80 行"在 L795-850 的 `buildAgentStream`**（含 7 步事件流的全部细节）：
 
-**观察 2**：用 `Mono.defer` 包一层是为了**延迟执行**——只有订阅时才计算 messages 列表。
+```java
+// ReActAgent.java:795-850 实际源码
+private Flux<AgentEvent> buildAgentStream(
+        List<Msg> msgs, RuntimeContext context, Function<List<Msg>, Mono<Msg>> doCallFn) {
+    String replyId = UUID.randomUUID().toString().replace("-", "");
+    Function<AgentInput, Flux<AgentEvent>> core = input ->
+            Flux.<AgentEvent>create(sink -> {
+                sink.next(new AgentStartEvent(null, replyId, getName()));
+                Mono<Msg> lifecycle = runLifecycle(input.msgs(), doCallFn);   // ← 真正的核心
+                if (context != null) {
+                    lifecycle = lifecycle.contextWrite(c -> c.put(RUNTIME_CONTEXT_KEY, context));
+                }
+                lifecycle
+                    .contextWrite(c -> c.put(EVENT_SINK_KEY, sink))
+                    .contextWrite(c -> c.put(AgentEventEmitter.CONTEXT_KEY, (AgentEventEmitter) sink::next))
+                    .doFinally(signal -> {
+                        sink.next(new AgentEndEvent(replyId));
+                        sink.complete();
+                    })
+                    .subscribe(
+                        finalMsg -> sink.next(new AgentResultEvent(finalMsg)),
+                        sink::error);
+            }, FluxSink.OverflowStrategy.BUFFER);
+    return MiddlewareChain.build(middlewares, this, context, MiddlewareBase::onAgent, core)
+            .apply(new AgentInput(msgs == null ? List.of() : msgs));
+}
+```
 
-**观察 3**：`.single()` 确保返回 `Mono<Msg>` 而不是 `Flux<Msg>`，与 `Agent` 接口契约一致（`Agent.java:47` 接口定义）。
+**关键纠正（与原报告相比）**：
+- `callInternal` 只有 5 行，**不包含** `firePreCall` / `Mono.defer` / `single()` 等步骤
+- `firePreCall` / `runLifecycle` 都在 **`AgentBase.runLifecycle`**（约 L250-320 范围）里实现，**不在 `callInternal`**
+- `single()` 实际是 `.takeLast(1).next()`（5 行方法没用到 `Mono.single()`）
+
+**观察 1**：`callInternal` 是个**薄壳**，把 stream → mono 的转换封装出来给 `call(...)` 用；真正的 80 行逻辑在 `buildAgentStream`。
+
+**观察 2**：`runLifecycle` 是 `AgentBase` 提供的模板方法，**实际在 `ReActAgent` 之外**。子类只重写 `doCall(msgs)`。
+
+**观察 3**：`.takeLast(1).next()` 等价于 `.single()`，但 `.next()` 在 0 个元素时直接 complete 而不抛 `NoSuchElementException`。
 
 ### 3.2 `reasoning()` 里的多阶段组合
 

@@ -1,28 +1,29 @@
 # 课程总目录
 
 > AgentScope Java 深度学习路线 · 12 章 · 基于 v2 主线源码
-> 最近更新：2026-06-29 · 维护人：杨海波 & Gennady
+> 最近更新：2026-06-29 · 维护人：杨海波 & Claude（联合核验）
+> 状态：当前为**初始化版本 + 第一次源码核验后修订版**（v0.2）
 
 ## 进度看板
 
 | 状态 | 章节 | 主题 | 预计时长 | 关键源码锚点 |
 |---|---|---|---|---|
-| ✅ | [Ch01](./chapters/ch01-framework-overview.md) | 框架全景与学习地图 | 1.5h | `ReActAgent.java:190`（入口）/ `:200`（类声明） |
-| ✅ | [Ch02](./chapters/ch02-reactive-foundation.md) | 反应式编程基石 | 2.5h | `ReActAgent.java` 全文 Reactor 链 |
-| ✅ | [Ch03](./chapters/ch03-message-and-block.md) | 消息模型 `Msg` 与 `ContentBlock` | 2h | `message/Msg.java:842`（9 种 ContentBlock） |
+| ✅ | [Ch01](./chapters/ch01-framework-overview.md) | 框架全景与学习地图 | 1.5h | `ReActAgent.java:627`（入口 `call`）/ `:200`（类声明） |
+| ✅ | [Ch02](./chapters/ch02-reactive-foundation.md) | 反应式编程基石 | 2.5h | `ReActAgent.java:769`（`callInternal` 5 行壳）/ `:795`（`buildAgentStream` 80 行核心） |
+| ✅ | [Ch03](./chapters/ch03-message-and-block.md) | 消息模型 `Msg` 与 `ContentBlock` | 2h | `message/Msg.java:842`（9 种 ContentBlock + sealed class） |
 | ✅ | [Ch04](./chapters/ch04-agent-and-state.md) | Agent 抽象与 `AgentState` | 2h | `agent/Agent.java:47`, `agent/AgentBase.java:1035` |
-| ✅ | [Ch05](./chapters/ch05-react-loop-deep-dive.md) | ReAct 主循环源码精读 | 3h | `ReActAgent.java:1835 reasoning` / `:2167 acting` / `:2838 summarizing` |
+| ✅ | [Ch05](./chapters/ch05-react-loop-deep-dive.md) | ReAct 主循环源码精读 | 3h | `ReActAgent.java:1835 reasoning` / `:2167 acting` / `:2937 summaryModelCallStream` |
 | ✅ | [Ch06](./chapters/ch06-toolkit-and-function-calling.md) | 工具调用与反射 | 3h | `tool/Toolkit.java:1031`, `tool/ReflectiveFunctionTool.java` |
-| ✅ | [Ch07](./chapters/ch07-memory-and-persistence.md) | 记忆与持久化 | 2.5h | `state/AgentState.java`, `memory/` |
-| ✅ | [Ch08](./chapters/ch08-middleware-and-hooks.md) | 中间件与 Hook 系统 | 2.5h | `middleware/MiddlewareChain.java`, `hook/Hook.java` |
-| ✅ | [Ch09](./chapters/ch09-structured-output-and-formatter.md) | 结构化输出与 Formatter | 2h | `formatter/`, `model/StructuredOutputReminder.java` |
+| ✅ | [Ch07](./chapters/ch07-memory-and-persistence.md) | 持久化 + ~~旧长期记忆（deprecated）~~ | 2.5h | `state/AgentState.java`, `state/JsonFileAgentStateStore.java:396` |
+| ✅ | [Ch08](./chapters/ch08-middleware-and-hooks.md) | 中间件与 Hook 系统 | 2.5h | `middleware/MiddlewareChain.java:78 行`（精确行号需 grep）, `hook/Hook.java` |
+| ✅ | [Ch09](./chapters/ch09-structured-output-and-formatter.md) | 结构化输出与 Formatter | 2h | `formatter/Formatter.java`（**泛型接口**）, `util/JsonSchemaUtils.java:96/131` |
 | ✅ | [Ch10](./chapters/ch10-multi-agent-and-harness.md) | 多 Agent 与 `HarnessAgent` | 3h | `agentscope-harness/agent/HarnessAgent.java:2251 行` |
-| ✅ | [Ch11](./chapters/ch11-mcp-a2a-protocols.md) | MCP / A2A 协议（进阶） | 2.5h | `tool/mcp/`, `extensions-nacos/` |
+| ✅ | [Ch11](./chapters/ch11-mcp-a2a-protocols.md) | MCP / A2A 协议（进阶） | 2.5h | `tool/mcp/McpClientBuilder.java:790`, `Toolkit.registerMcpClient(L538)` |
 | ✅ | [Ch12](./chapters/ch12-production-observability.md) | 生产化与可观测性（进阶） | 2.5h | `tracing/`, `shutdown/`, `permission/` |
 
-> **2026-06-29 核验完成**：通过 3 个 Explore agent 核对了 67 个声明点，修复 13 处 A 类严重错误 + 13 处 B 类行号/方法名错。详细核验报告见 `~/.claude/plans/vivid-launching-liskov.md`。
+> **2026-06-29 核验记录（v0.2）**：第 2 轮源码核验修复了 8 处 A 类严重错误 + 9 处 lab 编译失败 + 多处 B 类行号/方法名错。详细核验报告见 `~/.claude/plans/learning-opencode-cosmic-sloth.md`。
 
-> 状态标记：🔲 未开始 / 🟡 进行中 / ✅ 已完成（当前为**初始化版本**，每章学习时把对应状态改为 🟡 或 ✅）
+> 状态标记：🔲 未开始 / 🟡 进行中 / ✅ 已完成（**注意：✅ 表示"已写完初稿并通过源码核验"，不代表"你学完了"** —— 每章学习时把对应状态改为 🟡 或你自己的进度）
 
 ### 你的学习进度
 

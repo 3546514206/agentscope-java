@@ -1,6 +1,6 @@
 # ReAct 主循环时序图
 
-> 引用自 `agentscope-core/src/main/java/io/agentscope/core/ReActAgent.java:769 callInternal`
+> 引用自 `agentscope-core/src/main/java/io/agentscope/core/ReActAgent.java:795 buildAgentStream`（**注意：不是 L769 callInternal** —— `callInternal` 只有 5 行壳，本图描述的是它驱动的真实 7 步事件流）
 
 ## 整体一次 `agent.call(msg, ctx)` 的事件流
 

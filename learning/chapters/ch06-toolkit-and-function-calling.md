@@ -55,23 +55,33 @@ public class MyTool extends ToolBase {
 tk.registerAgentTool(new MyTool());
 ```
 
-### 2.3 `ToolBase` 的 9 个安全标志
+### 2.3 `ToolBase` 的 9 参数构造器
 
-读 `ToolBase.java` 构造器（`Builder` 模式）：
+`ToolBase.java` 有**两个构造器**（L80, L103）：
 
-| 标志 | 作用 |
-|---|---|
-| `name` | 工具名（模型看到的名字） |
-| `description` | 工具描述（模型决定何时调用） |
-| `inputSchema` | JSON Schema（参数校验 + 模型 prompt） |
-| `readOnly` | 是否只读（影响权限） |
-| `concurrencySafe` | 同 session 是否可并发 |
-| `externalTool` | 是否外部执行（返回 `ToolSuspendException`） |
-| `stateInjected` | 是否注入 `AgentState` 参数 |
-| `mcp` | 是否来自 MCP server |
-| `mcpName` | MCP server 名 |
-| `dangerousFiles` | 敏感文件路径列表 |
-| `dangerousDirectories` | 敏感目录列表 |
+1. **`ToolBase(Builder builder)`** —— **推荐**（业务侧首选）
+2. **`ToolBase(name, description, inputSchema, readOnly, concurrencySafe, mcp, mcpName, externalTool, stateInjected)`** —— 9 参数位置构造器（框架内置工具用）
+
+**关键纠正（与之前报告相比）**：
+- 参数顺序**不是** `externalTool → stateInjected → mcp → mcpName`，而是 **`mcp` 和 `mcpName` 在 `externalTool` 之前**（L103 实际签名）
+- `dangerousFiles` / `dangerousDirectories` **不在 9 参数构造器里**——它们只能通过 `Builder` 设置
+- 9 个核心标志：
+
+| 标志 | 类型 | 作用 |
+|---|---|---|
+| `name` | String | 工具名（模型看到的名字） |
+| `description` | String | 工具描述（模型决定何时调用） |
+| `inputSchema` | Map<String,Object> | JSON Schema（参数校验 + 模型 prompt） |
+| `readOnly` | boolean | 是否只读（影响权限） |
+| `concurrencySafe` | boolean | 同 session 是否可并发 |
+| `mcp` | boolean | 是否来自 MCP server |
+| `mcpName` | String | MCP server 名（`mcp=true` 时必填） |
+| `externalTool` | boolean | 是否外部执行（返回 `ToolSuspendException`） |
+| `stateInjected` | boolean | 是否注入 `AgentState` 参数 |
+
+**Builder 额外提供**（不在 9 参数构造器里）：
+- `dangerousFiles: List<String>` —— 敏感文件路径
+- `dangerousDirectories: List<String>` —— 敏感目录
 
 ### 2.4 `ToolSchemaGenerator` —— JSON Schema 自动生成
 
@@ -95,13 +105,18 @@ tk.registerAgentTool(new MyTool());
 
 ### 2.5 `ToolMethodInvoker` 反射调用
 
-`ToolMethodInvoker.java`（约 200 行）：
+`ToolMethodInvoker.java`（**实际 399 行**——不是"约 200 行"）：
 
-1. 拿到 `Method` 对象
-2. 检查 `stateInjected` → 如需，注入 `AgentState`
-3. 把 `Map<String,Object> input` 按参数名绑定
-4. 处理 `Mono` 返回值 / 同步返回值转换
-5. 异常 → `ToolResultBlock` 错误块
+关键方法在 L149（**private `Object[] convertParameters(Method, ToolExecutionContext)`**，3 个参数不是 2 个）：
+
+1. 拿到 `Method` 对象 + `ToolExecutionContext`（含 `AgentState`、`RuntimeContext`）
+2. 遍历 `Method` 的所有 `Parameter`
+3. 对每个参数：
+   - 如果类型是 `AgentState`（`stateInjected=true`）→ 从 ctx 取，注入
+   - 否则必须有 `@ToolParam` 注解 → 用 `toolParam.name()` 绑定
+4. 调 `Method.invoke(toolObject, args)`
+5. 同步返回值 → 包成 `Mono.just(...)`；`Mono` 返回值 → 原样透传
+6. 异常 → `ToolResultBlock` 错误块（含 isError=true + 异常消息）
 
 ### 2.6 `ToolGroup` 权限分组
 

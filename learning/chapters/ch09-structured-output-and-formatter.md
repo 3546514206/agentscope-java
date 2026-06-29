@@ -69,27 +69,42 @@ GenerateOptions opts = GenerateOptions.builder()
 
 这大大提高了模型遵循 schema 的概率。
 
-### 2.4 `Formatter` 抽象
+### 2.4 `Formatter` 抽象（**泛型接口**）
 
-`formatter/Formatter.java`：
+`formatter/Formatter.java`（**实际是泛型接口，不是简单 3 方法**）：
 
 ```java
-public interface Formatter {
-    FormattedRequest format(List<Msg> messages, List<ToolSchema> tools, GenerateOptions options);
-    Flux<ChatResponse> parseStream(Flux<String> rawStream);
-    ChatResponse parseNonStream(String rawBody);
+public interface Formatter<TReq, TResp, TParams> {
+    // TReq:  provider-specific 请求消息类型
+    // TResp: provider-specific 响应类型
+    // TParams: provider-specific 请求参数 builder 类型
+
+    List<TReq> format(List<Msg> msgs);
+
+    ChatResponse parseResponse(TResp response, Instant startTime);
+
+    void applyOptions(
+            TParams paramsBuilder, GenerateOptions options, GenerateOptions defaultOptions);
+
+    void applyTools(TParams paramsBuilder, List<ToolSchema> tools);
 }
 ```
 
+**关键纠正（与之前报告相比）**：
+- `Formatter` 是 **`Formatter<TReq, TResp, TParams>` 泛型接口**，不是普通 3 方法接口
+- 4 个方法：`format` / `parseResponse` / `applyOptions` / `applyTools`
+- `parseStream(Flux<String>)` / `parseNonStream(String)` **不存在**——实际是非流式响应直接走 `parseResponse(TResp, Instant)`；流式逻辑在 ChatModel 层而非 Formatter 层
+- 业务侧**一般不直接用 Formatter**——它是 Model 实现之间的内部接口
+
 **5 家实现**：
 
-| 实现 | 路径 | 特点 |
-|---|---|---|
-| OpenAI | `formatter/openai/` | `chat/completions` 协议、function calling、tools |
-| DashScope | `formatter/dashscope/` | 通义千问、`reasoning_content` 字段 |
-| Anthropic | `formatter/anthropic/` | Claude `messages` API、独立的 system |
-| Gemini | `formatter/gemini/` | Google `generateContent` |
-| Ollama | `formatter/ollama/` | 本地模型，OpenAI 兼容 |
+| 实现 | 路径 | 泛型参数 | 特点 |
+|---|---|---|---|
+| OpenAI | `formatter/openai/` | `<ChatCompletionMessageParam, ChatCompletion, ChatCompletionCreateParams.Builder>` | `chat/completions` 协议、function calling、tools |
+| DashScope | `formatter/dashscope/` | `<Message, GenerationResult, GenerationParam>` | 通义千问、`reasoning_content` 字段 |
+| Anthropic | `formatter/anthropic/` | `<MessageParam, Message, MessageCreateParams>` | Claude `messages` API、独立的 system |
+| Gemini | `formatter/gemini/` | `<Content, GenerateContentResponse, GenerateContentConfig>` | Google `generateContent` |
+| Ollama | `formatter/ollama/` | OpenAI 兼容 | 本地模型，OpenAI 兼容 |
 
 **设计意图**：模型不同 = 协议不同，但 Agent 代码**统一**。Formatter 是适配器层。
 
@@ -113,50 +128,84 @@ Order order = reActAgent.call(...)
 
 ## 3. 源码精读
 
-### 3.1 `ReActAgent.builder().structuredOutput(...)` 流程
+### 3.1 结构化输出：两条调用路径
 
-`ReActAgent.java:954 doCall(msgs, structuredOutputClass)`：
+**重要**：`ReActAgent.Builder` **没有** `structuredOutput(Class)` 方法——之前报告里"`ReActAgent.builder().structuredOutput(Order.class).build()`"用法**不存在**。
+
+实际 v2 走结构化输出有**两条路径**：
+
+#### 路径 1：用 `call()` 的重载（推荐）
+
+`ReActAgent.java:631-636`：
+
+```java
+public Mono<Msg> call(List<Msg> msgs, Class<?> structuredOutputClass, RuntimeContext context) {
+    return callInternal(msgs, context, m -> doCall(m, structuredOutputClass));
+}
+
+public Mono<Msg> call(List<Msg> msgs, JsonNode outputSchema, RuntimeContext context) {
+    return callInternal(msgs, context, m -> doCall(m, outputSchema));
+}
+```
+
+`doCall(msgs, Class<?>)` 在 `ReActAgent.java:954`：
 
 ```java
 protected Mono<Msg> doCall(List<Msg> msgs, Class<?> structuredOutputClass) {
-    // 1. 生成 JSON Schema（注意：实际走 JsonSchemaUtils，不是 ToolSchemaGenerator）
-    JsonNode schema = JsonSchemaUtils.generateSchemaFromType(structuredOutputClass);
-    // 2. 构造虚拟工具 soTool（兜底路径）
-    ToolBase soTool = SchemaOnlyTool.builder()...build();
-    // 3. 强制模型只用这个工具
-    options = options.withToolChoice(ToolChoice.SPECIFIC(soTool.getName()));
-    // 4. 走标准 ReAct 循环
-    return coreAgent();
+    return doStructuredCall(msgs, structuredOutputClass, null);
 }
 ```
+
+#### 路径 2：自己生成 schema 后传 `JsonNode`（高级用法）
+
+`ReActAgent.java:959-` 的 `doCall(List<Msg>, JsonNode)` 重载。
+
+**Schema 生成走 `JsonSchemaUtils`**（**注意方法名**）：
+
+```java
+// JsonSchemaUtils.java:96 - 接收 Class<?> 时用这个
+public static Map<String, Object> generateSchemaFromClass(Class<?> clazz)
+
+// JsonSchemaUtils.java:131 - 接收 Type 时用这个
+public static Map<String, Object> generateSchemaFromType(Type type)
+```
+
+**关键纠正（与之前报告相比）**：
+- `generateSchemaFromType(Class)` 是**错方法名**——传 `Class<?>` 应调用 `generateSchemaFromClass(Class<?>)`（L96）
+- `generateSchemaFromType(Type)`（L131）是给**参数化类型**（如 `List<Order>`）用的
 
 **关键**：
 
 - 如果模型支持原生 `response_format` → 设置 `options.responseFormat` 优先
 - 否则 → 注册虚拟工具强制走工具调用
 
-### 3.2 `ToolSchemaGenerator` 实际只有一个方法
+### 3.2 `ToolSchemaGenerator` 实际是**包私有类**
 
-`tool/ToolSchemaGenerator.java`（实际 152 行，**只有一个公开静态方法**）：
+`tool/ToolSchemaGenerator.java`（**实际 152 行，包私有类**）：
 
 ```java
-public static Map<String, Object> generateParameterSchema(
-        Method method, Set<String> excludeParams) { ... }
+// 注意：是包私有类，没有 public 修饰符
+class ToolSchemaGenerator {
+
+    // 注意：也是包私有方法，不是 public static
+    Map<String, Object> generateParameterSchema(Method method, Set<String> excludeParams) { ... }
+}
 ```
 
-**关键纠正**（与之前报告相比）：
+**关键纠正（与之前报告相比）**：
+- `ToolSchemaGenerator` 类**不带 `public`**——是**包私有**（`io.agentscope.core.tool` 包内可见）
+- `generateParameterSchema` 方法**也不带 `public static`**——同样是包私有
 - **不存在** `generate(Method)` 重载
 - **不存在** `generate(Class<?>)` 重载
-- 工具参数 schema 走 `generateParameterSchema(Method, Set<String>)`
-- **POJO 结构化输出 schema 不通过 `ToolSchemaGenerator`**，而是走 **`JsonSchemaUtils.generateSchemaFromType(...)`**（包私有工具类，`ToolSchemaGenerator` 在 L129 调用）
+- 业务侧**不能直接调用** `ToolSchemaGenerator.generateParameterSchema(...)`——它只供框架内部使用
+- 业务侧想生成工具参数 schema 只能走 `JsonSchemaUtils.generateSchemaFromClass(...)`（**Class 用 `fromClass`，Type 用 `fromType`**，不要混）
 
-实际 `ReActAgent.builder().structuredOutput(...)` 流程：
+实际工具注册流程（`Toolkit.registerTool(...)` 内部）：
 
 ```java
 // 框架内部
-JsonNode schema = JsonSchemaUtils.generateSchemaFromType(structuredOutputClass);  // 不是 ToolSchemaGenerator.generate(...)
-ToolBase soTool = SchemaOnlyTool.builder()...build();
-options = options.withToolChoice(ToolChoice.SPECIFIC(soTool.getName()));
+Map<String,Object> schema = new ToolSchemaGenerator().generateParameterSchema(method, excludeParams);
+// 然后把 schema 注入 ReflectiveFunctionTool
 ```
 
 ### 3.3 `Formatter` 实现精要

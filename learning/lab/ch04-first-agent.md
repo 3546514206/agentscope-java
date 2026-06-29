@@ -158,16 +158,18 @@ ReActAgent agent = ReActAgent.builder()
         @Override
         public String getName() { return "log-everything"; }
 
+        // 正确签名：<T extends HookEvent> Mono<T> onEvent(T event) —— 1 个泛型参数
+        // 之前报告里写的 onEvent(AgentEvent event, HookEventType type) 不能编译
         @Override
-        public Mono<HookEvent> onEvent(AgentEvent event, HookEventType type) {
-            System.out.println("[hook] " + type + " : " + event.getClass().getSimpleName());
-            return Mono.just(toEvent(event, type));
+        public <T extends HookEvent> Mono<T> onEvent(T event) {
+            System.out.println("[hook] " + event.getClass().getSimpleName());
+            return Mono.just(event);
         }
     })
     .build();
 ```
 
-**注意**：根据 `Hook.java` 实际接口签名调整，参考 `hook/HookEventType.java` 看支持的事件类型。
+**注意**：`Hook.onEvent` 是**单参数泛型签名**（`Hook.java:152`），不是双参数 `(AgentEvent, HookEventType)`。事件类型通过 `switch` 模式匹配（Java 21+）或 `instanceof` 判断。
 
 ## 实验 3：尝试不同 RuntimeContext 隔离
 

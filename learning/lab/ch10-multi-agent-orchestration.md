@@ -88,11 +88,13 @@ public class SubAgentDemo {
         ));
 
         // 把 researcher 注册为主 Agent 的工具
+        // 注意：SubAgentConfig 字段是 toolName，不是 .name()（ch10 之前报告里 .name() 不能编译）
         Toolkit mainTk = new Toolkit();
         mainTk.registerSubAgent(SubAgentConfig.builder()
-            .name("researcher")
-            .agent(researcher)
-            .build());
+            .toolName("researcher")          // ← 正确：toolName；不是 .name()
+            .description("负责检索资料")
+            .build(),
+            researcher);                       // ← 注意：agent 是作为第二个参数传给 registerSubAgent()，不是放在 builder 里
 
         ReActAgent mainAgent = ReActAgent.builder()
             .name("MainAgent")

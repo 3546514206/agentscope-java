@@ -158,7 +158,20 @@ public class ParallelTools {
 
 - 三个工具**并行**执行，总耗时 ≈ 400ms（最慢那个）
 - `subscribeOn(boundedElastic)` 把阻塞 IO 切到专用线程池
-- 如果用 `Thread.sleep` 而不 `subscribeOn`，**会卡住 reactor 线程** —— 演示了"反模式警告"为何成立
+
+**注意**：本实验**不是反模式演示**。`Thread.sleep` + `subscribeOn(boundedElastic)` **就是正确用法**——阻塞操作必须放到 `boundedElastic` 线程池执行，否则会卡 reactor 线程。
+
+**真正要避免的反模式**：
+
+```java
+// ❌ 反例：阻塞操作没切线程池（会卡 reactor 线程）
+Mono<String> bad = Mono.fromCallable(() -> {
+    Thread.sleep(300);  // ← 在 reactor 线程上 sleep
+    return "result";
+});  // ← 没 subscribeOn(boundedElastic)
+```
+
+**ch02 之前报告里把"Thread.sleep + subscribeOn"说成"反模式演示"是错的**——这恰恰是**正确用法**。
 
 ## 实验 4：Context 透传（替代 ThreadLocal）
 

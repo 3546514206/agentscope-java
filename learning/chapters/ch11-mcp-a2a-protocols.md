@@ -63,8 +63,9 @@ graph TB
 - 接入流程：MCP server 的 tools 自动注册为 `ToolBase`（`mcp=true`）
 
 ```java
+// 正确 API：registerMcpClient（不是 registerMcpServer）
 Toolkit tk = new Toolkit();
-tk.registerMcpServer(McpClientBuilder.builder()
+tk.registerMcpClient(McpClientWrapper.builder()
     .name("filesystem")
     .command("npx")
     .args(List.of("-y", "@modelcontextprotocol/server-filesystem", "/tmp"))
@@ -73,22 +74,35 @@ tk.registerMcpServer(McpClientBuilder.builder()
 // 之后：tk.getToolNames() 包含 read_file / write_file / list_directory ...
 ```
 
+**关键纠正（与之前报告相比）**：
+- API 叫 **`registerMcpClient(McpClientWrapper)`**（`Toolkit.java:538`），**不是** `registerMcpServer`
+- 参数类型是 `McpClientWrapper`（**不是** `McpClient`）
+- 返回 `Mono<Void>`（**不是 void**）—— 异步
+- 也可以通过 `Toolkit.Builder.mcpClient(McpClientWrapper)`（L838）注册
+
 ### 2.4 框架中的 A2A 集成
 
-`agentscope-harness/.../subagent/RemoteSubagentStub.java`：
+`agentscope-harness/.../subagent/RemoteSubagentStub.java`（**实际 54 行，没有 `endpoint` 字段**）：
 
-- 把远端 Agent 抽象为本地 `ToolBase`
+- 把远端 Agent 抽象为本地 `AgentBase`（**不是 ToolBase**）
 - 通过 HTTP 调用 + 服务发现（Nacos）
 - `SubagentDeclaration` 声明远端 Agent 能力
 
 ```java
+// 注意：之前报告里"RemoteSubagentStub.builder().endpoint(...)"的链式 API 不存在
+// 实际 RemoteSubagentStub 54 行只有 name/description 字段
+// 真正的 Nacos 服务发现 + HTTP 调用在 agentscope-extensions-nacos-a2a 子模块里
 toolkit.registerSubAgent(SubAgentConfig.builder()
-    .name("remote-researcher")
-    .agent(RemoteSubagentStub.builder()
-        .endpoint("http://research-service/agents/researcher")
-        .build())
+    .toolName("remote-researcher")        // 注意：是 toolName，不是 .name()
+    .description("远端研究员")
     .build());
+// 实际的远端 stub 由 SubagentFactory 解析
 ```
+
+**关键纠正**：
+- `RemoteSubagentStub` **没有** `.builder().endpoint(...)` API
+- 也没有 `NacosNamingService` / `HttpClient` / `endpoint` 字段
+- **Ch11 之前报告里"toolkit.registerSubAgent(... .builder().endpoint(...))"代码不能编译**
 
 ## 3. 源码精读
 

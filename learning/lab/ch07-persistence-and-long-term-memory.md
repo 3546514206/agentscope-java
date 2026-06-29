@@ -137,34 +137,42 @@ public class LongTermDemo {
         //
         // 详见：ReActAgent.builder() 的 longTermMemory() / longTermMemoryMode() 方法
 
-        // 自定义：实现一个简单的 InMemoryLongTermMemory
+        // ⚠️ 警告：LongTermMemory 整个接口 @Deprecated forRemoval since 2.0.0
+        // 本实验仅作"v1 时代如何写"的演示，新代码不应再实现 LongTermMemory
         LongTermMemory inMem = new LongTermMemory() {
             private final List<String> records = new ArrayList<>();
             @Override
-            public Mono<Void> record(Msg message) {
-                records.add(message.getTextContent());
+            public Mono<Void> record(List<Msg> msgs) {           // ← 实际签名是 record(List<Msg>)
+                for (Msg m : msgs) {
+                    if (m.getTextContent() != null) {
+                        records.add(m.getTextContent());
+                    }
+                }
                 return Mono.empty();
             }
             @Override
-            public Flux<Knowledge> retrieve(String query, int limit) {
-                return Flux.fromIterable(records.stream()
-                    .filter(r -> r.contains(query))
-                    .map(r -> new Knowledge(r, 1.0))
-                    .limit(limit)
-                    .toList());
+            public Mono<String> retrieve(Msg query) {            // ← 实际签名是 retrieve(Msg) → Mono<String>
+                StringBuilder sb = new StringBuilder();
+                for (String r : records) {
+                    if (query.getTextContent() != null
+                            && r.contains(query.getTextContent())) {
+                        sb.append(r).append("\n");
+                    }
+                }
+                return Mono.just(sb.toString());
             }
-            @Override
-            public Mono<Void> clear() {
-                records.clear();
-                return Mono.empty();
-            }
+            // 没有 clear() 方法 —— 如需清空需通过 record 覆盖或扩展实现
         };
 
-        // 接入 Agent
+        // 接入 Agent（v1 时代用法，v2 已 deprecated）
         // ReActAgent.builder()
         //     .longTermMemory(inMem)
         //     .longTermMemoryMode(LongTermMemoryMode.BOTH)
         //     .build();
+
+        // v2 推荐：直接用 AgentStateStore 做跨会话持久化
+        // AgentStateStore store = new JsonFileAgentStateStore(Path.of("/tmp/state"));
+        // ReActAgent.builder().stateStore(store).build();
     }
 }
 ```

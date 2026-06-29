@@ -55,7 +55,7 @@ import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.*;
 import io.agentscope.core.model.*;
 import io.agentscope.core.tool.*;
-import io.agentscope.core.tool.mcp.*;
+import io.agentscope.core.tool.mcp.*;     // ← McpClientWrapper 在这里
 import reactor.core.publisher.Flux;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -89,20 +89,22 @@ public class McpDemo {
     }
 
     public static void main(String[] args) {
-        // 1. 启动并连接 MCP server
-        McpClient mcp = McpClientBuilder.builder()
+        // 1. 构造 MCP client wrapper（注意：McpClientWrapper，不是 McpClient）
+        McpClientWrapper mcp = McpClientWrapper.builder()
             .name("filesystem")
             .command("npx")
             .args(List.of("-y", "@modelcontextprotocol/server-filesystem", "/tmp/mcp-workspace"))
             .build();
 
-        // 2. 验证连接（listTools）
-        List<McpTool> tools = mcp.listTools().block();
-        System.out.println("[mcp tools] " + tools.stream().map(McpTool::name).toList());
+        // 2. 验证连接（listTools）—— 实际 McpClientWrapper 通过 McpClientManager 管理生命周期
+        //    业务侧不需要直接调 listTools()
+        // List<McpTool> tools = mcp.listTools().block();   ← 之前这行不能编译
 
-        // 3. 注册到 Toolkit
+        // 3. 注册到 Toolkit（正确 API：registerMcpClient）
         Toolkit tk = new Toolkit();
-        tk.registerMcpClient(mcp);
+        tk.registerMcpClient(mcp);                    // ← 注意：registerMcpClient，不是 registerMcpServer
+        // registerMcpClient 返回 Mono<Void>，完整链：
+        // tk.registerMcpClient(mcp).block();
 
         // 4. 验证注册（注意：MCP 工具作为 ToolBase 注入）
         System.out.println("[all tools] " + tk.getToolNames());
@@ -135,7 +137,11 @@ public class McpDemo {
 }
 ```
 
-> **注意**：MCP Java SDK 版本与 agentscope-java 实际版本对齐。具体 `McpClientBuilder` 签名以你 build 时的源码为准。
+**关键纠正（与之前报告相比）**：
+- `McpClientBuilder.builder()...build()` 返回 **`McpClientWrapper`**，不是 `McpClient`
+- 变量名建议用 `mcp`（泛指）而不是 `McpClient mcp`（具体类名错）
+- `registerMcpClient(...)` 返回 `Mono<Void>`，**需要 `.block()` 才会真正注册**
+- 之前报告里 `mcp.listTools().block()` 不能编译——`McpClientWrapper` 没这个 API，listTools 在 `McpClientManager` 内部
 
 ## 实验 4：实际测试 MCP 工具
 

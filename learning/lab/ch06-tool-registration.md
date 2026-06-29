@@ -78,16 +78,18 @@ import java.util.Map;
 public class SensitiveTool extends ToolBase {
 
     public SensitiveTool() {
+        // 注意：9 参数顺序 (name, desc, schema, readOnly, concurrencySafe, mcp, mcpName, externalTool, stateInjected)
+        // 之前报告里写的顺序 (name, desc, schema, readOnly, concurrencySafe, externalTool, null, false, false) 错
         super("delete_file", "删除文件（危险）",
             Map.of("type", "object",
                    "properties", Map.of("path", Map.of("type", "string")),
                    "required", List.of("path")),
             false,   // readOnly
             false,   // concurrencySafe
-            false,   // externalTool
-            null,    // stateInjected：false
             false,   // mcp
-            false);  // mcpName
+            null,    // mcpName
+            false,   // externalTool
+            false);  // stateInjected
     }
 
     @Override
@@ -232,9 +234,16 @@ import io.agentscope.core.tool.*;
 ## 实验 5：Schema 自动生成 vs 手写
 
 ```java
-// 自动：ToolSchemaGenerator.generate(method)
-Map<String,Object> auto = ToolSchemaGenerator.generate(
-    WeatherTools.class.getDeclaredMethod("getWeather", String.class)
+// 自动：ToolSchemaGenerator 是包私有类，业务侧用 JsonSchemaUtils
+// 注意：ToolSchemaGenerator.generate(Method) 重载不存在
+// 正确做法：通过 Toolkit.registerTool(...) 让框架内部反射生成
+Toolkit tk = new Toolkit();
+tk.registerTool(new WeatherTools());
+// 然后看 tk.getToolSchemas() 拿到生成的 schema
+
+// 或者直接用 JsonSchemaUtils（推荐）：
+Map<String,Object> auto = io.agentscope.core.util.JsonSchemaUtils.generateSchemaFromClass(
+    WeatherTools.class  // ← 传 Class，不要传 Method
 );
 System.out.println("[auto schema] " + auto);
 

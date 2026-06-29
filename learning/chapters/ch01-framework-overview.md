@@ -22,7 +22,7 @@
 它是：
 
 - ✅ ReAct 推理循环的参考实现
-- ✅ 模型无关的 Agent 运行时（5 家 ChatModel 实现 + 1 个 ModelRegistry）
+- ✅ 模型无关的 Agent 运行时（5 家 ChatModel 实现：OpenAI / Anthropic / DashScope / Gemini / Ollama）
 - ✅ 工具调用、记忆、状态、中间件、Hook 的统一抽象
 - ✅ 企业级工程增强（`HarnessAgent` = ReActAgent + Workspace + 长期记忆 + 沙箱 + 多 Agent + A2A/MCP）
 
@@ -67,7 +67,7 @@ agentscope-java/
 
 | 包 | 一句话职责 | 关键文件 |
 |---|---|---|
-| `ReActAgent.java` | ReAct 循环本体 | `ReActAgent.java:200`（类声明）/ `ReActAgent.java:190`（入口 `call(List<Msg>)`）/ `ReActAgent.java:1835 reasoning` / `ReActAgent.java:2167 acting` / `ReActAgent.java:2838 summarizing` / `ReActAgent.java:2937 summaryModelCallStream` |
+| `ReActAgent.java` | ReAct 循环本体 | `ReActAgent.java:200`（类声明）/ `ReActAgent.java:627`（入口 `public Mono<Msg> call(List<Msg>, RuntimeContext)`）/ `ReActAgent.java:769`（`callInternal` 委派给 buildAgentStream）/ `ReActAgent.java:795`（`buildAgentStream` 实际驱动整个事件流）/ `ReActAgent.java:925`（`doCall(List<Msg>)`）/ `ReActAgent.java:1809 coreAgent` / `:1821 executeIteration` / `:1835 reasoning` / `:2167 acting` / `:2937 summaryModelCallStream` |
 | `agent/` | Agent 接口与骨架 | `Agent.java:47`, `AgentBase.java:91-216`, `RuntimeContext.java` |
 | `message/` | 消息模型 | `Msg.java` 842 行 + **9 种 ContentBlock** |
 | `tool/` | 工具调用体系 | `Toolkit.java` 1031 行 + 30+ 工具相关类 |
@@ -125,7 +125,7 @@ agentscope-java/
 
 ### 3.4 ReActAgent 与 HarnessAgent 的关系
 
-读 `agentscope-harness/src/main/java/io/agentscope/harness/agent/HarnessAgent.java`（约 200 行）：
+读 `agentscope-harness/src/main/java/io/agentscope/harness/agent/HarnessAgent.java`（实际 2251 行，**不要被文件名长度误导**——这是整车工程层，不是核心循环）：
 
 ```text
 HarnessAgent

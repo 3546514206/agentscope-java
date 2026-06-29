@@ -96,11 +96,17 @@ public class MsgBuilder {
             .build();
         System.out.println("final : " + finalMsg);
 
-        // 5. 不可变性验证
-        Msg modified = userMsg.withTextContent("上海呢？");
+        // 5. 不可变性验证（注意：withTextContent 不存在！改用 Builder 重建）
+        //    之前报告里写的 userMsg.withTextContent(...) 不能编译
+        Msg modified = Msg.builder()
+            .role(MsgRole.USER)
+            .id(userMsg.getId())                              // 保留同一个 id
+            .textContent("上海呢？")
+            .build();
         System.out.println("\n[原]  " + userMsg.getTextContent());
         System.out.println("[改]  " + modified.getTextContent());
         System.out.println("[同?] " + (userMsg == modified));  // 期望 false
+        System.out.println("[id同?] " + userMsg.getId().equals(modified.getId()));  // 期望 true
     }
 }
 ```
